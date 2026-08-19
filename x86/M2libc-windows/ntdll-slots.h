@@ -36,5 +36,6 @@
 #define NT_MAKEPARAMS  19  /* RtlCreateProcessParameters: __spawn, for the child's parameter block */
 #define NT_CREATEPROC  20  /* RtlCreateUserProcess: __spawn */
 #define NT_RESUME      21  /* NtResumeThread: __spawn: a new process starts suspended */
+#define NT_ALLOC       22  /* NtAllocateVirtualMemory: a real brk, for a program too big to live inside the image */
 
 #endif

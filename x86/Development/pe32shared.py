@@ -53,6 +53,7 @@ NTDLL = [
     ("fn_makeparams", "RtlCreateProcessParameters",   "__spawn, for the child's parameter block"),
     ("fn_createproc", "RtlCreateUserProcess",         "__spawn"),
     ("fn_resume",     "NtResumeThread",               "__spawn: a new process starts suspended"),
+    ("fn_alloc",      "NtAllocateVirtualMemory",      "a real brk, for a program too big to live inside the image"),
 ]
 
 def emit_shared(a):
