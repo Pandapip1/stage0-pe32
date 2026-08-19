@@ -84,6 +84,9 @@ rem the POSIX layer in M2libc-windows\{unistd,fcntl,sys\stat}.c.
 "%ART%\M2.exe" --architecture x86 ^
 	-f "%HERE%..\M2libc\sys\types.h" ^
 	-f "%HERE%..\M2libc\stddef.h" ^
+	-f "%HERE%..\M2libc\sys\utsname.h" ^
+	-f "%HERE%M2libc-windows\ntdll-slots.h" ^
+	-f "%HERE%M2libc-windows\ntdll.c" ^
 	-f "%HERE%M2libc-windows\unistd.c" ^
 	-f "%HERE%M2libc-windows\fcntl.c" ^
 	-f "%HERE%..\M2libc\fcntl.c" ^

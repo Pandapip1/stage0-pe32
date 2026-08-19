@@ -31,6 +31,7 @@
 #   __exit            stop, with a status
 #   __heap_start      where malloc may begin
 #   __ntdll           an ntdll routine, by slot, for the C above to call
+#   __stdslot         where one of the three standard handles is kept
 #
 # What it does not have is the one thing that differs between the two C
 # libraries built on it.  M2libc's own stdio.c keeps stdin, stdout and stderr
@@ -328,6 +329,25 @@ DEFINE test_ebx,ebx 85DB
 	sal_eax, !2                                 ; Four bytes to a slot
 	add_eax, &fn_table                          ; The first of them
 	mov_eax,[eax]                               ; The address in it
+	ret
+
+
+# __stdslot function
+# Receives 0, 1 or 2 in EAX
+# Returns the address of that standard handle in the process parameters
+#
+# __stdhandle reads one of the three; this gives out where it is, so that dup2
+# can put a different handle there.  Redirection on Windows is exactly this:
+# the three handles a child inherits are the three words this points into.
+:__stdslot
+	sal_eax, !2                                 ; 0, 1, 2 are a word apart
+	add_eax, %24                                ; ProcessParameters->hStdInput is at 0x18
+	push_ebx                                    ; Protect EBX
+	mov_ebx,eax                                 ; The offset we worked out
+	mov_eax,[fs:DWORD] %0x30                    ; TEB->PEB
+	mov_eax,[eax+BYTE] !16                      ; PEB->ProcessParameters
+	add_eax,ebx                                 ; The slot itself
+	pop_ebx                                     ; Restore EBX
 	ret
 
 

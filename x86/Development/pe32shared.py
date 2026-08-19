@@ -20,6 +20,38 @@ from stage0asm import (Asm, emit_find_ntdll, emit_resolve_export,
 
 BOUNDARY = "__shared_end"
 
+# Every ntdll routine any program here resolves, in the order resolve_all fills
+# them in.  That order is the slot numbering libc-core.M1's __ntdll indexes and
+# M2libc-windows/ntdll-slots.h names, so it is the one place it is written
+# down: append here, never insert, and regenerate.
+#
+# The first eight are what the hand-written stages need and are reached from
+# assembly by name.  The rest are for the POSIX layer above, which reaches them
+# by slot from C.  Resolving all of them in every program costs a walk of
+# ntdll's export table each, at startup, which is not measurable next to the
+# rest of what these programs do.
+NTDLL = [
+    ("fn_create",     "NtCreateFile",                 "open a file, or make one"),
+    ("fn_read",       "NtReadFile",                   "read"),
+    ("fn_write",      "NtWriteFile",                  "write"),
+    ("fn_close",      "NtClose",                      "close, and any other handle"),
+    ("fn_exit",       "NtTerminateProcess",           "_exit"),
+    ("fn_rtlpath",    "RtlDosPathNameToNtPathName_U", "a DOS path becomes an NT path"),
+    ("fn_setinfo",    "NtSetInformationFile",         "lseek, and unlink"),
+    ("fn_queryinfo",  "NtQueryInformationFile",       "lseek, and fstat"),
+    ("fn_queryattr",  "NtQueryAttributesFile",        "access"),
+    ("fn_queryfull",  "NtQueryFullAttributesFile",    "stat"),
+    ("fn_setcwd",     "RtlSetCurrentDirectory_U",     "chdir"),
+    ("fn_getcwd",     "RtlGetCurrentDirectory_U",     "getcwd"),
+    ("fn_dup",        "NtDuplicateObject",            "dup and dup2"),
+    ("fn_time",       "NtQuerySystemTime",            "time, gettimeofday, clock_gettime"),
+    ("fn_queryvol",   "NtQueryVolumeInformationFile", "isatty"),
+    ("fn_wait",       "NtWaitForSingleObject",        "waitpid"),
+    ("fn_queryproc",  "NtQueryInformationProcess",    "waitpid, for the exit status"),
+    ("fn_delete",     "NtDeleteFile",                 "unlink and rmdir"),
+    ("fn_version",    "RtlGetVersion",                "uname"),
+]
+
 def emit_shared(a):
     """Code first, then the data it uses, then the boundary label."""
     emit_find_ntdll(a)
@@ -77,12 +109,8 @@ def emit_shared(a):
     a.label("resolve_all")
     a.call("find_ntdll", "call find_ntdll")
     I("89 C3", "mov ebx, eax", "ntdll base, held across every resolve_export call")
-    for slot, nm in [("fn_create", "name_NtCreateFile"), ("fn_read", "name_NtReadFile"),
-                     ("fn_write", "name_NtWriteFile"), ("fn_close", "name_NtClose"),
-                     ("fn_exit", "name_NtTerminateProcess"), ("fn_rtlpath", "name_RtlDosPath"),
-                     ("fn_setinfo", "name_NtSetInformationFile"),
-                     ("fn_queryinfo", "name_NtQueryInformationFile")]:
-        a.push_lbl(nm)
+    for slot, export, _why in NTDLL:
+        a.push_lbl("name_" + export)
         a.push_r("ebx", "module_base")
         a.call("resolve_export", "call resolve_export")
         a.mov_mem_r(slot, "eax")
@@ -124,26 +152,14 @@ def emit_shared(a):
     def space(name, n, note):
         a.label(name); a.raw(b"\x00" * n, note)
 
-    asciiz("name_NtCreateFile", "NtCreateFile")
-    asciiz("name_NtReadFile", "NtReadFile")
-    asciiz("name_NtWriteFile", "NtWriteFile")
-    asciiz("name_NtClose", "NtClose")
-    asciiz("name_NtTerminateProcess", "NtTerminateProcess")
-    asciiz("name_RtlDosPath", "RtlDosPathNameToNtPathName_U")
-    asciiz("name_NtSetInformationFile", "NtSetInformationFile")
-    asciiz("name_NtQueryInformationFile", "NtQueryInformationFile")
+    for _slot, export, _why in NTDLL:
+        asciiz("name_" + export, export)
     # The fn_ slots are one contiguous array of resolved addresses, and
     # fn_table names its start: libc-core.M1's __ntdll indexes it, so C above
     # can reach an ntdll routine without a hand-written stub for each one.
     a.label("fn_table")
-    dd("fn_create", 0, "fn_create: resolved NtCreateFile")
-    dd("fn_read", 0, "fn_read: resolved NtReadFile")
-    dd("fn_write", 0, "fn_write: resolved NtWriteFile")
-    dd("fn_close", 0, "fn_close: resolved NtClose")
-    dd("fn_exit", 0, "fn_exit: resolved NtTerminateProcess")
-    dd("fn_rtlpath", 0, "fn_rtlpath: resolved RtlDosPathNameToNtPathName_U")
-    dd("fn_setinfo", 0, "fn_setinfo: resolved NtSetInformationFile, for lseek")
-    dd("fn_queryinfo", 0, "fn_queryinfo: resolved NtQueryInformationFile, for lseek")
+    for i, (slot, export, why) in enumerate(NTDLL):
+        dd(slot, 0, "%s: slot %d, resolved %s -- %s" % (slot, i, export, why))
     dd("g_access", 0, "g_access: DesiredAccess held across the RtlDosPathNameToNtPathName_U call")
     dd("g_disp", 0, "g_disp: CreateDisposition, same")
     dd("g_handle", 0, "g_handle: NtCreateFile's out-parameter")

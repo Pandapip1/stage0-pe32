@@ -17,7 +17,7 @@
 # hex0, hex1, hex2 and catm cannot use it -- there is no catm below catm to join
 # files with -- so they carry their own copies.
 #
-#   resolve_all()   fill in the eight fn_ slots; call it first
+#   resolve_all()   fill in every fn_ slot; call it first
 #   open_argv()     argv[1] for reading, argv[2] for writing
 #   fgetc()         the next input byte, or -4 at end of file
 #   fputc(al)       one byte to the output
@@ -281,7 +281,7 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_exit                 ; mov [fn_exit], eax
-	68 &name_RtlDosPath         ; push name_RtlDosPath
+	68 &name_RtlDosPathNameToNtPathName_U ; push name_RtlDosPathNameToNtPathName_U
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_rtlpath              ; mov [fn_rtlpath], eax
@@ -293,6 +293,50 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_queryinfo            ; mov [fn_queryinfo], eax
+	68 &name_NtQueryAttributesFile ; push name_NtQueryAttributesFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_queryattr            ; mov [fn_queryattr], eax
+	68 &name_NtQueryFullAttributesFile ; push name_NtQueryFullAttributesFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_queryfull            ; mov [fn_queryfull], eax
+	68 &name_RtlSetCurrentDirectory_U ; push name_RtlSetCurrentDirectory_U
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_setcwd               ; mov [fn_setcwd], eax
+	68 &name_RtlGetCurrentDirectory_U ; push name_RtlGetCurrentDirectory_U
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_getcwd               ; mov [fn_getcwd], eax
+	68 &name_NtDuplicateObject  ; push name_NtDuplicateObject
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_dup                  ; mov [fn_dup], eax
+	68 &name_NtQuerySystemTime  ; push name_NtQuerySystemTime
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_time                 ; mov [fn_time], eax
+	68 &name_NtQueryVolumeInformationFile ; push name_NtQueryVolumeInformationFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_queryvol             ; mov [fn_queryvol], eax
+	68 &name_NtWaitForSingleObject ; push name_NtWaitForSingleObject
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_wait                 ; mov [fn_wait], eax
+	68 &name_NtQueryInformationProcess ; push name_NtQueryInformationProcess
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_queryproc            ; mov [fn_queryproc], eax
+	68 &name_NtDeleteFile       ; push name_NtDeleteFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_delete               ; mov [fn_delete], eax
+	68 &name_RtlGetVersion      ; push name_RtlGetVersion
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_version              ; mov [fn_version], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -342,8 +386,8 @@
 :name_NtTerminateProcess
 4E 74 54 65 72 6D 69 6E 61 74 65 50 72 6F 63 65 73 73 00 # name_NtTerminateProcess = "NtTerminateProcess"
 
-:name_RtlDosPath
-52 74 6C 44 6F 73 50 61 74 68 4E 61 6D 65 54 6F 4E 74 50 61 74 68 4E 61 6D 65 5F 55 00 # name_RtlDosPath = "RtlDosPathNameToNtPathName_U"
+:name_RtlDosPathNameToNtPathName_U
+52 74 6C 44 6F 73 50 61 74 68 4E 61 6D 65 54 6F 4E 74 50 61 74 68 4E 61 6D 65 5F 55 00 # name_RtlDosPathNameToNtPathName_U = "RtlDosPathNameToNtPathName_U"
 
 :name_NtSetInformationFile
 4E 74 53 65 74 49 6E 66 6F 72 6D 61 74 69 6F 6E 46 69 6C 65 00 # name_NtSetInformationFile = "NtSetInformationFile"
@@ -351,32 +395,98 @@
 :name_NtQueryInformationFile
 4E 74 51 75 65 72 79 49 6E 66 6F 72 6D 61 74 69 6F 6E 46 69 6C 65 00 # name_NtQueryInformationFile = "NtQueryInformationFile"
 
+:name_NtQueryAttributesFile
+4E 74 51 75 65 72 79 41 74 74 72 69 62 75 74 65 73 46 69 6C 65 00 # name_NtQueryAttributesFile = "NtQueryAttributesFile"
+
+:name_NtQueryFullAttributesFile
+4E 74 51 75 65 72 79 46 75 6C 6C 41 74 74 72 69 62 75 74 65 73 46 69 6C 65 00 # name_NtQueryFullAttributesFile = "NtQueryFullAttributesFile"
+
+:name_RtlSetCurrentDirectory_U
+52 74 6C 53 65 74 43 75 72 72 65 6E 74 44 69 72 65 63 74 6F 72 79 5F 55 00 # name_RtlSetCurrentDirectory_U = "RtlSetCurrentDirectory_U"
+
+:name_RtlGetCurrentDirectory_U
+52 74 6C 47 65 74 43 75 72 72 65 6E 74 44 69 72 65 63 74 6F 72 79 5F 55 00 # name_RtlGetCurrentDirectory_U = "RtlGetCurrentDirectory_U"
+
+:name_NtDuplicateObject
+4E 74 44 75 70 6C 69 63 61 74 65 4F 62 6A 65 63 74 00 # name_NtDuplicateObject = "NtDuplicateObject"
+
+:name_NtQuerySystemTime
+4E 74 51 75 65 72 79 53 79 73 74 65 6D 54 69 6D 65 00 # name_NtQuerySystemTime = "NtQuerySystemTime"
+
+:name_NtQueryVolumeInformationFile
+4E 74 51 75 65 72 79 56 6F 6C 75 6D 65 49 6E 66 6F 72 6D 61 74 69 6F 6E 46 69 6C 65 00 # name_NtQueryVolumeInformationFile = "NtQueryVolumeInformationFile"
+
+:name_NtWaitForSingleObject
+4E 74 57 61 69 74 46 6F 72 53 69 6E 67 6C 65 4F 62 6A 65 63 74 00 # name_NtWaitForSingleObject = "NtWaitForSingleObject"
+
+:name_NtQueryInformationProcess
+4E 74 51 75 65 72 79 49 6E 66 6F 72 6D 61 74 69 6F 6E 50 72 6F 63 65 73 73 00 # name_NtQueryInformationProcess = "NtQueryInformationProcess"
+
+:name_NtDeleteFile
+4E 74 44 65 6C 65 74 65 46 69 6C 65 00 # name_NtDeleteFile = "NtDeleteFile"
+
+:name_RtlGetVersion
+52 74 6C 47 65 74 56 65 72 73 69 6F 6E 00 # name_RtlGetVersion = "RtlGetVersion"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
 :fn_create
-00 00 00 00                     # fn_create: resolved NtCreateFile
+00 00 00 00                     # fn_create: slot 0, resolved NtCreateFile -- open a file, or make one
 
 :fn_read
-00 00 00 00                     # fn_read: resolved NtReadFile
+00 00 00 00                     # fn_read: slot 1, resolved NtReadFile -- read
 
 :fn_write
-00 00 00 00                     # fn_write: resolved NtWriteFile
+00 00 00 00                     # fn_write: slot 2, resolved NtWriteFile -- write
 
 :fn_close
-00 00 00 00                     # fn_close: resolved NtClose
+00 00 00 00                     # fn_close: slot 3, resolved NtClose -- close, and any other handle
 
 :fn_exit
-00 00 00 00                     # fn_exit: resolved NtTerminateProcess
+00 00 00 00                     # fn_exit: slot 4, resolved NtTerminateProcess -- _exit
 
 :fn_rtlpath
-00 00 00 00                     # fn_rtlpath: resolved RtlDosPathNameToNtPathName_U
+00 00 00 00                     # fn_rtlpath: slot 5, resolved RtlDosPathNameToNtPathName_U -- a DOS path becomes an NT path
 
 :fn_setinfo
-00 00 00 00                     # fn_setinfo: resolved NtSetInformationFile, for lseek
+00 00 00 00                     # fn_setinfo: slot 6, resolved NtSetInformationFile -- lseek, and unlink
 
 :fn_queryinfo
-00 00 00 00                     # fn_queryinfo: resolved NtQueryInformationFile, for lseek
+00 00 00 00                     # fn_queryinfo: slot 7, resolved NtQueryInformationFile -- lseek, and fstat
+
+:fn_queryattr
+00 00 00 00                     # fn_queryattr: slot 8, resolved NtQueryAttributesFile -- access
+
+:fn_queryfull
+00 00 00 00                     # fn_queryfull: slot 9, resolved NtQueryFullAttributesFile -- stat
+
+:fn_setcwd
+00 00 00 00                     # fn_setcwd: slot 10, resolved RtlSetCurrentDirectory_U -- chdir
+
+:fn_getcwd
+00 00 00 00                     # fn_getcwd: slot 11, resolved RtlGetCurrentDirectory_U -- getcwd
+
+:fn_dup
+00 00 00 00                     # fn_dup: slot 12, resolved NtDuplicateObject -- dup and dup2
+
+:fn_time
+00 00 00 00                     # fn_time: slot 13, resolved NtQuerySystemTime -- time, gettimeofday, clock_gettime
+
+:fn_queryvol
+00 00 00 00                     # fn_queryvol: slot 14, resolved NtQueryVolumeInformationFile -- isatty
+
+:fn_wait
+00 00 00 00                     # fn_wait: slot 15, resolved NtWaitForSingleObject -- waitpid
+
+:fn_queryproc
+00 00 00 00                     # fn_queryproc: slot 16, resolved NtQueryInformationProcess -- waitpid, for the exit status
+
+:fn_delete
+00 00 00 00                     # fn_delete: slot 17, resolved NtDeleteFile -- unlink and rmdir
+
+:fn_version
+00 00 00 00                     # fn_version: slot 18, resolved RtlGetVersion -- uname
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access

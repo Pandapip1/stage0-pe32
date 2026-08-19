@@ -168,11 +168,36 @@ since the image carries its writable memory with it, and `chmod` does nothing
 and returns success, which is the honest answer on a system where a file is
 executable because its PE header says so.
 
-What is deliberately absent from that layer: `fork`, `execve`, `waitpid`,
-`chdir`, `access`, `uname`, `stat`, `mkdir`. Nothing this bootstrap builds
-calls them -- `kaem`, the program that would want the first three, is not built
-here -- and writing them with no caller to check them against would be writing
-untested code.
+Everything M2libc's `unistd.h` and `sys/stat.h` declare is there.
+`x86/M2libc-windows/ntdll.c` is what the rest of it stands on: `__ntdll(slot)`
+hands back a routine ntdll-i386.hex2 resolved, and `__ntobject(path)` turns a
+filename into the OBJECT_ATTRIBUTES around an NT path that every ntdll call
+naming a file wants. `x86/M2libc-windows/ntdll-slots.h` says which slot is
+which and is generated, from the same list `ntdll-i386.hex2` is, so the two
+cannot drift apart. `x86/Development/posix-test.c` calls every routine once and
+checks the answer.
+
+Where Windows has no answer -- `chroot`, `mount`, `unshare`, `symlink`,
+`mknod`, `fchdir` -- the call fails, and says why above itself. Failing is the
+point: `chmod` returning 0 is honest because a PE runs on account of its
+header, and `chroot` returning 0 would not be.
+
+Calling ntdll from compiled C works because of an accident of M2-Planet's code
+generator, and comes with a rule that has to be kept by hand. M2-Planet saves
+the stack pointer in EBP before pushing arguments and restores it from there
+afterwards, so it never adds back what it pushed -- which is what lets it call
+stdcall routines that pop their own arguments. It also pushes the first
+argument first, so every call below is written backwards. And it holds the
+pointer it is about to call in EDX across the argument list without saving it,
+so an argument that writes EDX -- a function call, a `*` or `/` or `%`, an
+array subscript -- replaces the address about to be called, and the program
+jumps to zero with nothing to say where it came from. That cost three
+debugging rounds in one sitting, so `x86/Development/check_fnptr_args.py`
+fails on one now, and is checked against all three.
+
+`fork`, `execve` and `waitpid` are still missing. They are what `kaem`,
+M2-Mesoplanet and GNU Mes all want, and Windows has no `fork` at all, so they
+are a port rather than a translation.
 
 M1-macro is a fuller assembler than M0: more label and pointer widths, every
 architecture stage0 supports in one binary. Upstream also runs this stage's

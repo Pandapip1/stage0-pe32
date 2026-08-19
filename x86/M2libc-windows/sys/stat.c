@@ -15,10 +15,10 @@
  * Returning success is therefore the honest answer to "is the output now
  * executable", not a stub papering over a missing feature.
  *
- * The rest of the file's surface -- fchmod, mkdir, mknod, umask, stat, fstat --
- * has no caller anywhere in this bootstrap, so it is not written.  Windows has
- * an answer for each of them; none is worth guessing at without a caller to
- * check it against.
+ * fchmod is chmod by another name and does nothing for the same reason.
+ * mkdir is a real call.  mknod has no Windows counterpart -- there are no
+ * device nodes in the filesystem to make -- and umask has nothing to keep,
+ * since none of the bits it would mask reach anything here.
  */
 
 #ifndef __SYS_STAT_C
@@ -32,5 +32,66 @@
 int chmod(char* pathname, int mode)
 {
 	return 0;
+}
+
+/* The same answer, for the same reason, about a file already open. */
+int fchmod(int a, mode_t b)
+{
+	return 0;
+}
+
+/* NtCreateFile makes a directory as readily as a file, given
+ * FILE_DIRECTORY_FILE and FILE_CREATE, and the handle it hands back is closed
+ * straight away because the directory is what was wanted, not a way in to it.
+ * mode goes the way it does in chmod: accepted and ignored. */
+int mkdir(char* a, mode_t b)
+{
+	int (*NtCreateFile)(int, int, int, int, int, int, int, int, int, int, int);
+	int (*NtClose)(int);
+	int* oa;
+	int* iosb;
+	int* handle;
+	int h;
+
+	oa = __ntobject(a);
+	if(NULL == oa) return -1;
+
+	iosb = calloc(2, 4);
+	handle = calloc(1, 4);
+	NtCreateFile = __ntdll(NT_CREATE);
+
+	/* forwards: NtCreateFile(handle, FILE_LIST_DIRECTORY|SYNCHRONIZE, oa,
+	 *                        iosb, NULL, FILE_ATTRIBUTE_NORMAL,
+	 *                        FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_CREATE,
+	 *                        FILE_DIRECTORY_FILE|FILE_SYNCHRONOUS_IO_NONALERT,
+	 *                        NULL, 0) */
+	if(0 != NtCreateFile(0, 0, 0x21, 2, 3, 0x80, 0, iosb, oa, 0x00100001, handle)) return -1;
+
+	NtClose = __ntdll(NT_CLOSE);
+	h = handle[0];                 /* not in the argument list: see ntdll.c */
+	NtClose(h);
+	return 0;
+}
+
+/* A device is not a file on Windows and there is nothing in a directory to
+ * make one out of.  Nothing here calls this; M2libc's sys/stat.h declares it. */
+int mknod(char* a, mode_t b, dev_t c)
+{
+	return -1;
+}
+
+/* There is nothing to mask.  chmod does nothing here, so the bits this would
+ * take away from it were never going to reach anything; what it keeps is the
+ * number, so that a caller which sets a mask and puts the old one back sees
+ * what it expects. */
+mode_t _the_umask;
+
+mode_t umask(mode_t m)
+{
+	mode_t was;
+
+	was = _the_umask;
+	_the_umask = m;
+	return was;
 }
 #endif
