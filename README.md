@@ -25,6 +25,7 @@ reading, from the bottom up.
     x86/cc_x86.M1                             cc_x86, written in M1
     M2-Planet                                 a fuller C compiler, in C
     mescc-tools/M1-macro.c                    M1-macro, a fuller assembler, in C
+    mescc-tools/hex2_linker.c                 hex2 again, in C, without the fixed table
 
 | link | adds |
 | ---- | ---- |
@@ -36,12 +37,13 @@ reading, from the bottom up.
 | cc_x86 | a subset of C, large enough to compile M2-Planet |
 | M2-Planet | the rest of the C this project's programs are written in |
 | M1-macro | more label and pointer widths, and every architecture stage0 supports, in one binary |
+| hex2 (from C) | the same linker without the hand-written one's fixed label table |
 
 ## Building
 
-Clone with submodules -- from cc_x86 up, the build compiles C, and M2-Planet
-and M2libc's bootstrap C library are vendored as submodules rather than by
-hand, since they are upstream's exactly as upstream wrote them:
+Clone with submodules -- from cc_x86 up, the build compiles C, and M2-Planet,
+M2libc and mescc-tools are vendored as submodules rather than by hand, since
+they are upstream's exactly as upstream wrote them:
 
     git clone --recurse-submodules <this repo>
 
@@ -71,9 +73,11 @@ there is no catm below catm to join files with -- so they carry their own
 copies. Upstream has the same arrangement in `x86/libc-core.M1`.
 
 There is no `brk`. `x86/PE32-i386.hex2` gives every program a section whose
-VirtualSize runs to the top of a 16 MB image, so the memory past the end of the
-file is already mapped and already zero. A program declares a buffer by putting
-a label after `:PE_end` and never asks the operating system for memory.
+VirtualSize runs to the top of a 128 MB image, so the memory past the end of
+the file is already mapped and already zero. A program declares a buffer by
+putting a label after `:PE_end` and never asks the operating system for memory.
+16 MB was the original figure and was not enough: M0 processing the M1 that
+builds M2-Planet wants over 22 MB of it.
 
 `SectionAlignment` is the page size, and the header pads to 0x1000 to match.
 The format permits less, and wine accepts less, but Windows 11 refuses such an
@@ -128,16 +132,38 @@ more than its name suggests: it is the mnemonic set M2's own code generator
 actually emits, wider than what cc_x86.M1's hand-written assembly happens to
 use. Getting this wrong doesn't fail loudly. M0 passes an unrecognized
 mnemonic through as plain text rather than erroring, hex2 can't make sense of
-it either, and the instruction is silently dropped -- which is exactly what
-happened here once, while bringing up M1-macro: a mnemonic-set mismatch this
-subtle reproduced identically on upstream's own native, ELF, years-old `M1`
-binary once fed the same wrong file, which is how it was confirmed to be
-neither a PE32 issue nor an upstream one.
+it either, and the instruction is silently dropped: the build succeeds, the
+binary comes out a few bytes short, and the failure surfaces later as an
+illegal instruction somewhere unrelated.
+
+That cost two debugging sessions -- the wrong `x86_defs.M1` entirely while
+bringing up M1-macro, then three mnemonics missing from `libc-core.M1` while
+bringing up hex2. The first was confirmed to be neither a PE32 issue nor an
+upstream one by reproducing it identically on upstream's own native, ELF,
+years-old `M1` binary once fed the same wrong file. `regenerate.sh` now runs
+`x86/Development/check_mnemonics.py`, which fails on a mnemonic nothing
+DEFINEs; it is checked against both of those bugs.
 
 M2-Planet's own C is unmodified, so it always ends its output with `:ELF_end`,
 the label its ELF header expects; `PE32-i386.hex2` expects `:PE_end`.
 `x86/pe-end-shim.M1` defines `:PE_end` at that same address without touching
 the vendored source -- catm puts it right after M2's output.
+
+`x86/M2libc-windows/` is where the port actually lives. `bootstrap.c` is the
+whole C library for the stages that can use `--bootstrap-mode`; `unistd.c`,
+`fcntl.c` and `sys/stat.c` are the POSIX layer underneath M2libc's own
+`stdio.c` for the stages that cannot. A file descriptor is a Windows HANDLE,
+with 0, 1 and 2 still meaning the three standard streams -- no real handle is
+that small, so nothing above can tell. `brk` has nothing to ask the kernel for,
+since the image carries its writable memory with it, and `chmod` does nothing
+and returns success, which is the honest answer on a system where a file is
+executable because its PE header says so.
+
+What is deliberately absent from that layer: `fork`, `execve`, `waitpid`,
+`chdir`, `access`, `uname`, `stat`, `mkdir`. Nothing this bootstrap builds
+calls them -- `kaem`, the program that would want the first three, is not built
+here -- and writing them with no caller to check them against would be writing
+untested code.
 
 M1-macro is a fuller assembler than M0: more label and pointer widths, every
 architecture stage0 supports in one binary. Upstream also runs this stage's
