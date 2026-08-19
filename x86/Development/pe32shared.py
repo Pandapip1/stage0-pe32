@@ -32,6 +32,9 @@ def emit_shared(a):
 
     # ---- fgetc ----
     a.label("fgetc")
+    a.push_r("ebx", "an ntdll call keeps ebx, esi, edi and ebp, but not ecx or edx")
+    a.push_r("ecx")
+    a.push_r("edx")
     a.push_imm(0, "Key")
     a.push_imm(0, "ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position")
     a.push_imm(1, "Length = 1")
@@ -43,19 +46,31 @@ def emit_shared(a):
     I("85 C0", "test eax, eax", "NTSTATUS < 0 (STATUS_END_OF_FILE) is the end")
     a.jcc("s", "fgetc.eof", "js fgetc.eof")
     a.movzx_eax_mem("inbuf", "movzx eax, byte [inbuf]")
-    a.ret("ret")
+    a.jmp("fgetc.done", "jmp fgetc.done")
     a.label("fgetc.eof")
     a.mov_r_imm("eax", -4, "mov eax, -4  -- EOF, as upstream reports it")
+    a.label("fgetc.done")
+    a.pop_r("edx")
+    a.pop_r("ecx")
+    a.pop_r("ebx")
     a.ret("ret")
 
     # ---- fputc ----
     a.label("fputc")
+    a.push_r("eax", "the byte written comes back in eax, as upstream's fputc leaves it")
+    a.push_r("ebx")
+    a.push_r("ecx")
+    a.push_r("edx")
     a.mov_mem_al("outbuf", "mov [outbuf], al")
     a.push_imm(0, "Key"); a.push_imm(0, "ByteOffset"); a.push_imm(1, "Length = 1")
     a.push_lbl("outbuf", "Buffer"); a.push_lbl("iosb", "IoStatusBlock")
     a.push_imm(0, "ApcContext"); a.push_imm(0, "ApcRoutine"); a.push_imm(0, "Event")
     a.push_mem("out_handle", "FileHandle")
     a.call_mem("fn_write")
+    a.pop_r("edx")
+    a.pop_r("ecx")
+    a.pop_r("ebx")
+    a.pop_r("eax")
     a.ret("ret")
 
     # ---- resolve_all: fill in every fn_ slot ----
@@ -156,8 +171,11 @@ FILE_SYNCHRONOUS_IO_NONALERT keeps the file position in the I/O manager, which
 is why every read and write passes a NULL ByteOffset and still advances.""",
 "fgetc": """fgetc() -> eax = the next byte of the input, or -4 at end of file.
 -4 rather than -1 because that is what upstream's fgetc returns and what its
-callers compare against.""",
-"fputc": "fputc(al = byte): one write per byte, as upstream does it.",
+callers compare against.  Every register but eax comes back untouched, which is
+what upstream's callers assume of it.""",
+"fputc": """fputc(al = byte): one write per byte, as upstream does it.  Every
+register comes back untouched, eax included, so a caller may write the same byte
+twice without reloading it.""",
 "resolve_all": """resolve_all(): fill in the six fn_ slots.  Call this before anything else;
 nothing below works until it has run.""",
 "open_argv": """open_argv(): argv[1] opened for reading, argv[2] created or truncated for

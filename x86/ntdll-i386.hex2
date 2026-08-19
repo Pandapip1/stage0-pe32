@@ -185,8 +185,12 @@
 
 # fgetc() -> eax = the next byte of the input, or -4 at end of file.
 # -4 rather than -1 because that is what upstream's fgetc returns and what its
-# callers compare against.
+# callers compare against.  Every register but eax comes back untouched, which is
+# what upstream's callers assume of it.
 :fgetc
+	53                          ; push ebx                    # an ntdll call keeps ebx, esi, edi and ebp, but not ecx or edx
+	51                          ; push ecx
+	52                          ; push edx
 	6A 00                       ; push 0x0                    # Key
 	6A 00                       ; push 0x0                    # ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position
 	6A 01                       ; push 0x1                    # Length = 1
@@ -200,14 +204,25 @@
 	85 C0                       ; test eax, eax               # NTSTATUS < 0 (STATUS_END_OF_FILE) is the end
 	0F 88 %fgetc.eof            ; js fgetc.eof
 	0F B6 05 &inbuf             ; movzx eax, byte [inbuf]
-	C3                          ; ret
+	E9 %fgetc.done              ; jmp fgetc.done
 
 :fgetc.eof
 	B8 FC FF FF FF              ; mov eax, -0x4               # mov eax, -4  -- EOF, as upstream reports it
+
+:fgetc.done
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
 	C3                          ; ret
 
-# fputc(al = byte): one write per byte, as upstream does it.
+# fputc(al = byte): one write per byte, as upstream does it.  Every
+# register comes back untouched, eax included, so a caller may write the same byte
+# twice without reloading it.
 :fputc
+	50                          ; push eax                    # the byte written comes back in eax, as upstream's fputc leaves it
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
 	A2 &outbuf                  ; mov [outbuf], al
 	6A 00                       ; push 0x0                    # Key
 	6A 00                       ; push 0x0                    # ByteOffset
@@ -219,6 +234,10 @@
 	6A 00                       ; push 0x0                    # Event
 	FF 35 &out_handle           ; push dword [out_handle]     # FileHandle
 	FF 15 &fn_write             ; call [fn_write]
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
 	C3                          ; ret
 
 # resolve_all(): fill in the six fn_ slots.  Call this before anything else;
