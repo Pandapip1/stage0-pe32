@@ -271,10 +271,11 @@ char* get_current_dir_name()
  * is two more ntdll routines and a key walk for a field nothing here reads --
  * so it is left empty, which calloc already made it.
  *
- * release is the version RtlGetVersion reports, which for anything since
- * Windows 8.1 is what the process manifest asks for rather than what is
- * running: an unmanifested program is told 6.2 by Windows 10 and 11 alike.
- * The build number in version is the one that does not lie. */
+ * RtlGetVersion is used rather than the documented GetVersionEx because it is
+ * the one that does not lie: since Windows 8.1 the Win32 call reports what the
+ * process manifest asks for, and tells an unmanifested program it is running
+ * on 6.2, while this one reports what is actually there.  Checked on Windows
+ * 11, where it gives 10.0 build 22621 to a program with no manifest at all. */
 int uname(struct utsname* unameData)
 {
 	int (*RtlGetVersion)(int);
