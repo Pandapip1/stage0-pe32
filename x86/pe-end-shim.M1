@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# pe-end-shim.M1: M2-Planet's own C is unmodified -- vendored as a submodule,
+# not ported -- and it always ends its output with :ELF_end, the label its own
+# ELF header expects.  PE32-i386.hex2 expects :PE_end instead.  catm puts this
+# immediately after M2's output, so :PE_end names the same address as :ELF_end
+# without touching the vendored source.
+:PE_end

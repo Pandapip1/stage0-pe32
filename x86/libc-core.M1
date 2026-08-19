@@ -5,16 +5,25 @@
 # Additional permission under GNU GPL version 3 section 7:
 # see LICENSE.EXCEPTION in the root of this project.
 #
-# libc-core-pe32: what a C program compiled by cc_x86 stands on.
+# libc-core-pe32: what a compiled C program stands on, whether cc_x86 compiled
+# it (M2-Planet itself, in Phase 5) or M2 did (everything after).
 #
-# cc_x86 emits calls and arithmetic and nothing else.  Everything a program
+# A compiler emits calls and arithmetic and nothing else.  Everything a program
 # does that is not arithmetic has to be here, or in the bootstrap.c that goes
 # with this file.  catm puts the three in front of the compiled program:
 #
-#   catm prog-0.M1 x86_defs.M1 libc-core.M1 prog.M1
+#   catm prog-0.M1 M2libc/x86/x86_defs.M1 libc-core.M1 prog.M1
 #   M0 prog-0.M1 prog-0.hex2
 #   catm prog.hex2 PE32-i386.hex2 ntdll-i386.hex2 prog-0.hex2
 #   hex2 prog.hex2 prog.exe
+#
+# M2libc/x86/x86_defs.M1 -- the submodule's own, not a copy -- matters more
+# than it looks: it is the mnemonic set M2's own code generator actually emits
+# (xor_eax,eax and friends), which is wider than what cc_x86.M1's hand-written
+# assembly happens to use.  A DEFINE M0 doesn't recognize isn't an error -- it
+# passes the text through unchanged, which hex2 then can't make sense of
+# either, and the mnemonic is silently dropped instead of assembled.  Getting
+# this file wrong doesn't fail loudly; it corrupts the binary quietly.
 #
 # so ntdll-i386.hex2 is linked in as well and this file may call into it.  What
 # it adds on top is the part that is specific to C rather than to Windows:
@@ -50,9 +59,9 @@
 # and this is the layer below the one that could report it.
 
 
-# Instructions x86_defs.M1 does not already name.  A duplicate DEFINE is
-# harmless -- x86_defs.M1 has one of its own -- but there is no reason to add
-# any, so these are only the ones it lacks.
+# Instructions M2libc/x86/x86_defs.M1 does not already name.  A duplicate
+# DEFINE is harmless, but there is no reason to add any, so these are only the
+# ones it lacks.
 DEFINE add_ebx, 81C3
 DEFINE add_ecx, 81C1
 DEFINE add_edi, 81C7

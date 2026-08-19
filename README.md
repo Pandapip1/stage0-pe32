@@ -23,6 +23,8 @@ reading, from the bottom up.
     x86/ntdll-i386.hex2                       the shared Windows plumbing, in hex2
     x86/M0_x86.hex2                           M0, written in hex2
     x86/cc_x86.M1                             cc_x86, written in M1
+    M2-Planet                                 a fuller C compiler, in C
+    mescc-tools/M1-macro.c                    M1-macro, a fuller assembler, in C
 
 | link | adds |
 | ---- | ---- |
@@ -32,6 +34,8 @@ reading, from the bottom up.
 | catm | concatenating files, so a header can be put in front of a program |
 | M0   | macros, strings and immediates: the first real language |
 | cc_x86 | a subset of C, large enough to compile M2-Planet |
+| M2-Planet | the rest of the C this project's programs are written in |
+| M1-macro | more label and pointer widths, and every architecture stage0 supports, in one binary |
 
 ## Building
 
@@ -110,13 +114,39 @@ format, different entry, different plumbing -- but the compiler between them is
 demonstrably the same compiler.
 
 From cc_x86 up, the chain compiles C rather than hand-written assembly, and the
-C it compiles first is M2-Planet's own: `M2-Planet/` and `M2libc/` are git
-submodules, pinned to the exact commits stage0-posix itself vendors them at,
-because nothing in them is Windows-specific and there is nothing to port.
-`x86/libc-core.M1` and `x86/M2libc-windows/bootstrap.c` are what M2-Planet
-compiles against instead of `M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit
-plumbing a C program needs, standing on `x86/ntdll-i386.hex2` the same way
-`x86/cc_x86.M1` does. See their own headers for what each routine does.
+C it compiles first is M2-Planet's own: `M2-Planet/`, `M2libc/` and
+`mescc-tools/` are git submodules, pinned to the exact commits stage0-posix
+itself vendors them at, because nothing in them is Windows-specific and there
+is nothing to port. `x86/libc-core.M1` and `x86/M2libc-windows/bootstrap.c` are
+what M2-Planet and M1-macro compile against instead of
+`M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit plumbing a C program
+needs, standing on `x86/ntdll-i386.hex2` the same way `x86/cc_x86.M1` does. See
+their own headers for what each routine does.
+
+`M2libc/x86/x86_defs.M1` -- the submodule's copy, not a copy of it -- matters
+more than its name suggests: it is the mnemonic set M2's own code generator
+actually emits, wider than what cc_x86.M1's hand-written assembly happens to
+use. Getting this wrong doesn't fail loudly. M0 passes an unrecognized
+mnemonic through as plain text rather than erroring, hex2 can't make sense of
+it either, and the instruction is silently dropped -- which is exactly what
+happened here once, while bringing up M1-macro: a mnemonic-set mismatch this
+subtle reproduced identically on upstream's own native, ELF, years-old `M1`
+binary once fed the same wrong file, which is how it was confirmed to be
+neither a PE32 issue nor an upstream one.
+
+M2-Planet's own C is unmodified, so it always ends its output with `:ELF_end`,
+the label its ELF header expects; `PE32-i386.hex2` expects `:PE_end`.
+`x86/pe-end-shim.M1` defines `:PE_end` at that same address without touching
+the vendored source -- catm puts it right after M2's output.
+
+M1-macro is a fuller assembler than M0: more label and pointer widths, every
+architecture stage0 supports in one binary. Upstream also runs this stage's
+output through `blood-elf`, a tool whose entire job is emitting an ELF symbol
+table and section headers purely so `objdump` and `gdb` can read the result --
+nothing downstream depends on it functionally, confirmed by diffing upstream's
+"debug" and plain ELF headers, which differ only in that section-header table.
+There is no PE equivalent worth building for that, so this port skips
+`blood-elf` entirely; `PE32-i386.hex2` stands in unchanged.
 
 ## Licence
 

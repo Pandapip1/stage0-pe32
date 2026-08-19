@@ -48,12 +48,33 @@ rem port of M2libc\x86\linux\bootstrap.c and is the only Windows-specific piece.
 	"%HERE%..\M2-Planet\cc_types.c" "%HERE%..\M2-Planet\cc_emit.c" "%HERE%..\M2-Planet\cc_core.c" ^
 	"%HERE%..\M2-Planet\cc_macro.c" "%HERE%..\M2-Planet\cc.c" || goto :fail
 "%ART%\cc_x86.exe" "%ART%\M2-0.c" "%ART%\M2-0.M1" || goto :fail
-"%ART%\catm.exe" "%ART%\M2-0-0.M1" "%HERE%x86_defs.M1" "%HERE%libc-core.M1" "%ART%\M2-0.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\M2-0-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\M2-0.M1" || goto :fail
 "%ART%\M0.exe" "%ART%\M2-0-0.M1" "%ART%\M2-0.hex2" || goto :fail
 "%ART%\catm.exe" "%ART%\M2-0-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\M2-0.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M2-0-0.hex2" "%ART%\M2.exe" || goto :fail
 
-echo Built: hex0 hex1 hex2 catm M0 cc_x86 M2
+rem Phase-6  M1-macro, a fuller assembler than M0: more label and pointer
+rem widths, more architectures in one binary.  Compiled by M2 like any other
+rem program; upstream also runs this stage's output through blood-elf first,
+rem to add an ELF symbol table purely so objdump and gdb can read it -- there
+rem is no PE equivalent worth building, and nothing here needs it, so that
+rem step is skipped and PE32-i386.hex2 stands in unchanged.
+rem
+rem M2's own C is unmodified, so it always ends its output with :ELF_end, the
+rem label its ELF header expects; PE32-i386.hex2 expects :PE_end.  pe-end-shim.M1
+rem defines :PE_end at that same address without touching the vendored source.
+"%ART%\M2.exe" --architecture x86 --bootstrap-mode ^
+	-f "%HERE%M2libc-windows\bootstrap.c" ^
+	-f "%HERE%..\M2libc\bootstrappable.c" ^
+	-f "%HERE%..\mescc-tools\stringify.c" ^
+	-f "%HERE%..\mescc-tools\M1-macro.c" ^
+	-o "%ART%\M1-macro.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\M1-macro-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\M1-macro.M1" "%HERE%pe-end-shim.M1" || goto :fail
+"%ART%\M0.exe" "%ART%\M1-macro-0.M1" "%ART%\M1-macro.hex2" || goto :fail
+"%ART%\catm.exe" "%ART%\M1-macro-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\M1-macro.hex2" || goto :fail
+"%ART%\hex2.exe" "%ART%\M1-macro-0.hex2" "%ART%\M1.exe" || goto :fail
+
+echo Built: hex0 hex1 hex2 catm M0 cc_x86 M2 M1
 exit /b 0
 
 :fail
