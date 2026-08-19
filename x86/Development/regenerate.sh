@@ -17,6 +17,13 @@ python3 gen_m0.py     /tmp/M0.exe   ../M0_x86.hex2 ../ntdll-i386.hex2
 cmp /tmp/hex0.exe ../../bootstrap-seeds/PE32/i386/hex0-seed.exe \
   && echo "seed still reproduces"
 
+# libc-core.M1 is hand-written M1 whose mnemonics have to exist in the
+# x86_defs.M1 it will be concatenated with.  M0 does not diagnose one that
+# doesn't -- it passes the token through and the instruction silently vanishes
+# -- so check here, where the failure is a message rather than a corrupt binary
+# noticed several stages later.
+python3 check_mnemonics.py ../libc-core.M1 ../../M2libc/x86/x86_defs.M1
+
 # cc_x86.M1 is readable assembly rather than hex, so it is not written from
 # scratch here: port_cc_x86.py patches upstream's copy.  Point CC_X86_UPSTREAM
 # at a stage0-posix checkout's x86/cc_x86.M1 to re-derive it and see whether
