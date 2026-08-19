@@ -19,6 +19,13 @@
  * back what it exited with; a program that is not there fails rather than
  * hanging; arguments survive being joined into one command line and split
  * again, which it checks by spawning itself; and execve does not return.
+ *
+ * The second and fifth of those pass under wine and fail on Windows, where a
+ * child's writes to a handle it was given rather than opened report success
+ * and go nowhere.  That is a real defect and it is not understood; see the
+ * head of x86/M2libc-windows/process.c.  On Windows the "and what arrived
+ * was" list therefore comes out empty, which is the symptom rather than an
+ * argument that failed to survive.
  */
 
 int main(int argc, char** argv)

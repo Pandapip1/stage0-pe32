@@ -1,0 +1,7 @@
+std handle 0 = 0x30
+std handle 1 = 0x34
+std handle 2 = 0x38
+lseek(1,0,CUR) before = 0
+write(1, "hello", 5) returned 5
+lseek(1,0,CUR) after = 0
+write(2, "hello", 5) returned 5

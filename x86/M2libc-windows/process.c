@@ -47,6 +47,19 @@
  * The child inherits this process's three standard handles, which is what
  * makes redirection work at all, but only those three.
  *
+ * That last part works under wine and does NOT work on Windows, and the
+ * difference is not understood.  What is known: the three handles are
+ * duplicated with OBJ_INHERIT and their numbers written into the child's
+ * parameter block; the child reads those same numbers back out of its own
+ * PEB; and NtWriteFile to them returns success and a count.  On Windows the
+ * bytes then go nowhere -- not to the parent's console and not to the file
+ * the parent's output was redirected to, with the parent writing nothing
+ * afterwards that could land on top of them.  A child still runs, still reads
+ * and writes files it opens itself, and still reports its exit status, all of
+ * which are checked on Windows; only handles it was given rather than opened
+ * are affected.  Everything this bootstrap builds opens its own files, so
+ * nothing here depends on it, but a shell would.
+ *
  * The calling rules for everything below are in M2libc-windows/ntdll.c: the
  * arguments go in backwards, and none of them may write EDX.
  */
@@ -226,6 +239,27 @@ char* __envblock(char** envp)
 	return w;
 }
 
+/* The same handle again, marked so that a child may inherit it.
+ *
+ * A handle is only passed to a child if it was created inheritable, and the
+ * three this process was handed need not have been -- on Windows the parent
+ * has to say so, and duplicating with OBJ_INHERIT is how.  If the duplicate
+ * fails the original is used, which is no worse than not trying. */
+int __inheritable(int handle)
+{
+	int (*NtDuplicateObject)(int, int, int, int, int, int, int);
+	int* out;
+
+	if(0 == handle) return 0;
+
+	out = calloc(1, 4);
+	NtDuplicateObject = __ntdll(NT_DUP);
+	/* forwards: NtDuplicateObject(-1, handle, -1, out, 0, OBJ_INHERIT,
+	 *                             DUPLICATE_SAME_ACCESS) */
+	if(0 != NtDuplicateObject(2, 2, 0, out, -1, handle, -1)) return handle;
+	return out[0];
+}
+
 /* Start a program.  Returns a handle to it, which waitpid takes, or -1.
  *
  * RtlCreateProcessParameters builds the block the child's PEB will point at --
@@ -249,6 +283,7 @@ int __spawn(char* file_name, char** argv, char** envp)
 	int* params;
 	int* info;
 	int* slot;
+	int h;
 	int thread;
 	int rc;
 
@@ -270,13 +305,20 @@ int __spawn(char* file_name, char** argv, char** envp)
 	params = out[0];
 
 	/* hStdInput, hStdOutput and hStdError, at 0x18, 0x1c and 0x20 into the
-	 * block -- the same three words __stdslot points into here. */
+	 * block -- the same three words __stdslot points into here.  Each is
+	 * duplicated inheritable first: writing the number into the child's
+	 * parameters says which handle it should use, but only a handle marked
+	 * inheritable is actually copied into the child, and the three this
+	 * process was given need not be. */
 	slot = __stdslot(0);
-	params[6] = slot[0];
+	h = slot[0];
+	params[6] = __inheritable(h);
 	slot = __stdslot(1);
-	params[7] = slot[0];
+	h = slot[0];
+	params[7] = __inheritable(h);
 	slot = __stdslot(2);
-	params[8] = slot[0];
+	h = slot[0];
+	params[8] = __inheritable(h);
 
 	/* RTL_USER_PROCESS_INFORMATION: Length, Process, Thread, a CLIENT_ID and
 	 * a SECTION_IMAGE_INFORMATION, which is 68 bytes altogether.  The room is

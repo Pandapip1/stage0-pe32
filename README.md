@@ -219,8 +219,16 @@ A caller that today says `fork()` then `execve` in the child and `waitpid` in
 the parent says `__spawn` then `waitpid` instead, and needs no fork; that is
 the change `kaem` and M2-Mesoplanet would want, and it is two lines.
 
-The child inherits this process's three standard handles, which is what makes
-redirection possible. Windows hands a child one string rather than a vector,
+The child is meant to inherit this process's three standard handles, which is
+what would make redirection possible, and here the port has a defect: it works
+under wine and not on Windows. The handles are duplicated with `OBJ_INHERIT`
+and their numbers written into the child's parameter block, the child reads the
+same numbers back out of its own PEB, and `NtWriteFile` to them returns success
+and a count -- and on Windows the bytes go nowhere. A child still runs, still
+reads and writes files it opens itself, and still reports its exit status,
+which are checked on Windows; only handles it was given rather than opened are
+affected. Nothing built here depends on it, because every program in this chain
+opens its own files, but a shell would. Windows hands a child one string rather than a vector,
 so `__spawn` joins argv into one and the child splits it again; both halves
 follow `CommandLineToArgvW`, so an argument survives whatever is in it.
 `C:\dir\` is the case that makes the rule worth following exactly rather than
