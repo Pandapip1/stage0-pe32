@@ -21,7 +21,7 @@ What changes, and why:
   _start          Windows puts no argument vector on the stack, and open(),
                   read(), write(), brk() and exit() are not syscalls a user
                   program may make.  ntdll-i386.hex2 has all of it.
-  malloc          the image carries 16MB of zero-filled writable memory past
+  malloc          the image carries 128MB of zero-filled writable memory past
                   the end of the file, so there is no break to move.
   fgetc, fputc    deleted; ntdll-i386.hex2 defines both, keeping the registers
                   upstream's callers expect kept.
@@ -184,7 +184,7 @@ def port(s):
 	pop_ebx                                     # Restore EBX
 	ret''',
 '''# Requires [MALLOC] to be initialized and EAX to have the number of desired bytes
-# Upstream moves the break here; the image has 16MB of zero-filled writable
+# Upstream moves the break here; the image has 128MB of zero-filled writable
 # memory past the end of the file, so this is only ever a bump of the pointer.
 # Nothing is freed, and the memory is already zero, so this is calloc as well.
 :malloc

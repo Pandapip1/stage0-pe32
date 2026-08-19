@@ -421,7 +421,7 @@ DEFINE xchg_eax,ebx 93
 # Malloc isn't actually required if the program being built fits in the initial memory
 # However, it doesn't take much to add it.
 # Requires [MALLOC] to be initialized and EAX to have the number of desired bytes
-# Upstream moves the break here; the image has 16MB of zero-filled writable
+# Upstream moves the break here; the image has 128MB of zero-filled writable
 # memory past the end of the file, so this is only ever a bump of the pointer.
 # Nothing is freed, and the memory is already zero, so this is calloc as well.
 :malloc

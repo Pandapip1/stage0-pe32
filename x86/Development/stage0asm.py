@@ -205,6 +205,10 @@ class Asm:
         self.raw(b"\x83\x3d"); self.patch(4, lambda a, L, n=name: L[n], None)
         self.raw(bytes([v & 0xff]), self._c("cmp dword [%s], %s" % (name, self._imm(v)), prose))
 
+    def cmp_mem_imm32(self, name, v, prose=None):
+        self.raw(b"\x81\x3d"); self.patch(4, lambda a, L, n=name: L[n], None)
+        self.raw(struct.pack("<i", v), self._c("cmp dword [%s], %s" % (name, self._imm(v)), prose))
+
 
 # ===================== PE emitter =====================
 def datline(bs, comment):
@@ -523,12 +527,30 @@ def emit_find_ntdll(a):
 def emit_resolve_export(a):
     a.label("resolve_export"); _emit_asm(a, RESOLVE_ASM, RESOLVE)
 
-def emit_next_token(a):
-    """Split the command line into arguments; see the DOC entry."""
+def emit_next_token(a, tabs=False):
+    """Split the command line into arguments; see the DOC entry.
+
+    tabs=True also treats a tab as a separator, alongside space.  It matters
+    because cmd.exe's ^ line continuation joins a wrapped command onto one
+    line by dropping the ^ and the newline and nothing else -- a continuation
+    line indented with a tab, which is this project's own convention, leaves
+    that tab sitting in the child's actual command line right where the space
+    before it already was.  hex0 and hex1 are always invoked on one line, so
+    they keep the plain, space-only version: hex0's own copy has to stay
+    exactly what it always was, byte for byte, for the seed to keep
+    reproducing itself.  Anything invoked across continuation lines --
+    catm, and everything from M0 up through ntdll-i386.hex2 -- takes tabs=True.
+    """
     a.label("next_token")
     a.label(".skip")
     a.raw(b"\x66\x83\x3e\x20", "cmp word [esi], ' '")
-    a.jcc("ne", ".tok_start", "jne .tok_start")
+    if tabs:
+        a.jcc("e", ".skip_adv", "je .skip_adv")
+        a.raw(b"\x66\x83\x3e\x09", "cmp word [esi], TAB")
+        a.jcc("ne", ".tok_start", "jne .tok_start")
+        a.label(".skip_adv")
+    else:
+        a.jcc("ne", ".tok_start", "jne .tok_start")
     a.raw(b"\x83\xc6\x02", "add esi, 2")
     a.jmp(".skip", "jmp .skip")
     a.label(".tok_start")
@@ -542,6 +564,9 @@ def emit_next_token(a):
     a.jcc("e", ".done", "je .done  -- last token, already NUL-terminated")
     a.raw(b"\x66\x83\x3e\x20", "cmp word [esi], ' '")
     a.jcc("e", ".cut", "je .cut")
+    if tabs:
+        a.raw(b"\x66\x83\x3e\x09", "cmp word [esi], TAB")
+        a.jcc("e", ".cut", "je .cut")
     a.raw(b"\x83\xc6\x02", "add esi, 2")
     a.jmp(".scan", "jmp .scan")
     a.label(".quoted")
@@ -565,8 +590,15 @@ def emit_next_token(a):
 
     # ---- open_file: eax = PWSTR path, ecx = DesiredAccess, edx = CreateDisposition ----
 
-def emit_open_file(a):
-    """Open one file by DOS path; see the DOC entry."""
+def emit_open_file(a, check_status=False):
+    """Open one file by DOS path; see the DOC entry.
+
+    check_status adds a test of the returned NTSTATUS, so a file that could not
+    be opened comes back as 0 rather than as whatever NtCreateFile left in its
+    out-parameter.  It is off by default because hex0 carries its own copy of
+    this routine and hex0 has to keep assembling to exactly the seed; only the
+    shared plumbing, which nothing below M0 uses, asks for it.
+    """
     a.label("open_file")
     a.mov_mem_r("g_access", "ecx", "stash DesiredAccess")
     a.mov_mem_r("g_disp", "edx", "stash CreateDisposition")
@@ -591,8 +623,15 @@ def emit_open_file(a):
     a.push_mem("g_access", "DesiredAccess")
     a.push_lbl("g_handle", "FileHandle (out)")
     a.call_mem("fn_create")
+    if check_status:
+        a.raw(bytes.fromhex("85C0"), a._c("test eax, eax", "NTSTATUS < 0 is a failure to open"))
+        a.jcc("s", "open_file.fail", "js open_file.fail")
     a.mov_r_mem("eax", "g_handle", "mov eax, [g_handle]")
     a.ret("ret")
+    if check_status:
+        a.label("open_file.fail")
+        a.raw(bytes.fromhex("31C0"), a._c("xor eax, eax", "0, which is what fopen in C tests for"))
+        a.ret("ret")
 
     # ---- _start ----
 

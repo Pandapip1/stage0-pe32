@@ -17,7 +17,7 @@ HDR_SIZE   = int(os.environ.get("NOVA_HDR",   "0x1000"), 0)
 SECT_ALIGN = int(os.environ.get("NOVA_SECT",  "0x1000"), 0)
 FILE_ALIGN = int(os.environ.get("NOVA_FILE",  "0x200"), 0)
 ALIGN      = SECT_ALIGN
-IMAGE_SIZE = int(os.environ.get("NOVA_IMAGE", "0x1000000"), 0)
+IMAGE_SIZE = int(os.environ.get("NOVA_IMAGE", "0x8000000"), 0)
 VSIZE      = IMAGE_SIZE - HDR_SIZE # the section covers the rest of it
 TEXT_BASE  = IMAGE_BASE + HDR_SIZE
 

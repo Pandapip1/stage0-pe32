@@ -34,7 +34,7 @@
 # multiple of FileAlignment, which Windows does accept.
 #
 # The section's VirtualSize runs to the top of the image, so everything between
-# the end of the file and 0x1400000 is zero-filled writable memory.  A program
+# the end of the file and 0x8400000 is zero-filled writable memory.  A program
 # declares a buffer by putting a label after :PE_end and never has to ask for
 # memory at run time.
 #
@@ -94,7 +94,7 @@ B8 00                           # e_sp
 04 00                           # MajorSubsystemVersion
 00 00                           # MinorSubsystemVersion
 00 00 00 00                     # Win32VersionValue
-00 00 00 01                     # SizeOfImage = 0x1000000
+00 00 00 08                     # SizeOfImage = 0x8000000
 00 10 00 00                     # SizeOfHeaders = 0x1000
 00 00 00 00                     # CheckSum = 0, which is accepted for anything but a kernel image
 03 00                           # Subsystem = 3 (console)
@@ -108,7 +108,7 @@ B8 00                           # e_sp
 
 ## Section header
 2E 74 65 78 74 00 00 00         # Name = '.text'
-00 F0 FF 00                     # VirtualSize = 0xfff000
+00 F0 FF 07                     # VirtualSize = 0x7fff000
 00 10 00 00                     # VirtualAddress = 0x1000
 %PE_end>PE_text                 # SizeOfRawData: the rest is past the end of the file and zero-filled
 00 10 00 00                     # PointerToRawData = 0x1000

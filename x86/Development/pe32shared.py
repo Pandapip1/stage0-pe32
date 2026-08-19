@@ -24,8 +24,8 @@ def emit_shared(a):
     """Code first, then the data it uses, then the boundary label."""
     emit_find_ntdll(a)
     emit_resolve_export(a)
-    emit_next_token(a)
-    emit_open_file(a)
+    emit_next_token(a, tabs=True)
+    emit_open_file(a, check_status=True)
 
     def I(hx, mn, prose=None):
         a.raw(bytes.fromhex(hx.replace(" ", "")), a._c(mn, prose))
@@ -163,12 +163,16 @@ e_lfanew to reach the PE header, then walks the export directory: a name match
 gives an index, that index gives an ordinal, that ordinal gives an address.""",
 "next_token": """next_token() -> eax = the next argument, or 0 when exhausted.
 esi is the cursor into the command line.  Characters are UTF-16, so it advances
-two bytes at a time, and the terminator is overwritten with a NUL in place.""",
-"open_file": """open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition) -> handle.
+two bytes at a time, and the terminator is overwritten with a NUL in place.  A
+separator is space or tab; see emit_next_token's own docstring for why tab
+matters here.""",
+"open_file": """open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition)
+-> handle, or 0 if the file could not be opened.
 RtlDosPathNameToNtPathName_U turns the DOS path into the NT path NtCreateFile
 needs, resolving a relative path against the working directory.
 FILE_SYNCHRONOUS_IO_NONALERT keeps the file position in the I/O manager, which
-is why every read and write passes a NULL ByteOffset and still advances.""",
+is why every read and write passes a NULL ByteOffset and still advances.
+The path is UTF-16, which is the only kind ntdll takes.""",
 "fgetc": """fgetc() -> eax = the next byte of the input, or -4 at end of file.
 -4 rather than -1 because that is what upstream's fgetc returns and what its
 callers compare against.  Every register but eax comes back untouched, which is

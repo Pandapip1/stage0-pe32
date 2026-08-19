@@ -69,12 +69,12 @@ B8 00                           # e_sp
 0B 01                           # Magic = 0x010b (PE32)
 02                              # MajorLinkerVersion
 29                              # MinorLinkerVersion
-34 08 00 00                     # SizeOfCode = 0x834
+4E 08 00 00                     # SizeOfCode = 0x84e
 00 00 00 00                     # SizeOfInitializedData
-00 00 00 00                     # SizeOfUninitializedData = 0x22200
-FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
+00 00 00 00                     # SizeOfUninitializedData = 0x440200
+14 16 00 00                     # AddressOfEntryPoint = 0x1614 -> _start
 00 10 00 00                     # BaseOfCode = 0x1000
-34 18 00 00                     # BaseOfData
+4E 18 00 00                     # BaseOfData
 00 00 40 00                     # ImageBase = 0x400000
 00 10 00 00                     # SectionAlignment = 0x1000
 00 02 00 00                     # FileAlignment = 0x200
@@ -85,9 +85,9 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 04 00                           # MajorSubsystemVersion
 00 00                           # MinorSubsystemVersion
 00 00 00 00                     # Win32VersionValue
-00 40 02 00                     # SizeOfImage = 0x24000
+00 20 44 00                     # SizeOfImage = 0x442000
 00 02 00 00                     # SizeOfHeaders = 0x200
-8D D7 00 00                     # CheckSum = 0xd78d
+54 94 00 00                     # CheckSum = 0x9454
 03 00                           # Subsystem = 3 (console)
 00 01                           # DllCharacteristics = 0x0100 (NX compatible)
 00 00 20 00                     # SizeOfStackReserve
@@ -97,9 +97,9 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 00 00 00 00                     # LoaderFlags
 00 00 00 00                     # NumberOfRvaAndSizes = 0 (no data directories, so no import table)
 2E 74 65 78 74 00 00 00         # Section[0].Name = '.text'
-34 2A 02 00                     # VirtualSize = 0x22a34 (code, data, and zero-filled reservations)
+4E 0A 44 00                     # VirtualSize = 0x440a4e (code, data, and zero-filled reservations)
 00 10 00 00                     # VirtualAddress = 0x1000
-34 08 00 00                     # SizeOfRawData = 0x834, the exact length of the program
+4E 08 00 00                     # SizeOfRawData = 0x84e, the exact length of the program
 00 02 00 00                     # PointerToRawData = 0x200
 00 00 00 00                     # PointerToRelocations
 00 00 00 00                     # PointerToLinenumbers
@@ -111,7 +111,7 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 ## ==== .text : one line per instruction ====
 
 #:find_ntdll ; (0x401000)
-:y
+:z
 	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # eax = PEB (TEB->PEB at fs:0x30 on x86)
 	8B 40 0C                    ; mov eax, [eax + 0x0c]       # eax = PEB->Ldr (PEB_LDR_DATA*)
 	8B 40 14                    ; mov eax, [eax + 0x14]       # eax = Ldr->InMemoryOrderModuleList.Flink
@@ -120,7 +120,7 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 	C3                          ; ret
 
 #:resolve_export ; (0x401012)
-:z
+:0
 	53                          ; push ebx
 	56                          ; push esi
 	57                          ; push edi
@@ -183,16 +183,16 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 	6A 00                       ; push 0x0                    # Key
 	6A 00                       ; push 0x0                    # ByteOffset
 	6A 01                       ; push 0x1                    # Length = 1
-	68 32 18 40 00              ; push input                  # Buffer
-	68 DA 17 40 00              ; push iosb                   # IoStatusBlock
+	68 4C 18 40 00              ; push input                  # Buffer
+	68 F4 17 40 00              ; push iosb                   # IoStatusBlock
 	6A 00                       ; push 0x0                    # ApcContext
 	6A 00                       ; push 0x0                    # ApcRoutine
 	6A 00                       ; push 0x0                    # Event
-	FF 35 EA 17 40 00           ; push dword [in_handle]      # FileHandle
-	FF 15 96 17 40 00           ; call [fn_read]
+	FF 35 04 18 40 00           ; push dword [in_handle]      # FileHandle
+	FF 15 B0 17 40 00           ; call [fn_read]
 	85 C0                       ; test eax, eax
 	0F 88 %A                    ; js .eof
-	0F B6 05 32 18 40 00        ; movzx eax, byte [input]
+	0F B6 05 4C 18 40 00        ; movzx eax, byte [input]
 	C3                          ; ret
 
 #:.eof ; (0x4010A9)
@@ -202,23 +202,23 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 
 # write_n(eax = buffer, ecx = length): append to the output file.
 #:write_n ; (0x4010AF)
-:X
-	A3 FA 17 40 00              ; mov [w_buf], eax
-	89 0D FE 17 40 00           ; mov [w_len], ecx
+:Y
+	A3 14 18 40 00              ; mov [w_buf], eax
+	89 0D 18 18 40 00           ; mov [w_len], ecx
 	6A 00                       ; push 0x0                    # Key
 	6A 00                       ; push 0x0                    # ByteOffset
-	FF 35 FE 17 40 00           ; push dword [w_len]          # Length
-	FF 35 FA 17 40 00           ; push dword [w_buf]          # Buffer
-	68 DA 17 40 00              ; push iosb                   # IoStatusBlock
+	FF 35 18 18 40 00           ; push dword [w_len]          # Length
+	FF 35 14 18 40 00           ; push dword [w_buf]          # Buffer
+	68 F4 17 40 00              ; push iosb                   # IoStatusBlock
 	6A 00                       ; push 0x0                    # ApcContext
 	6A 00                       ; push 0x0                    # ApcRoutine
 	6A 00                       ; push 0x0                    # Event
-	FF 35 EE 17 40 00           ; push dword [out_handle]     # FileHandle
-	FF 15 9A 17 40 00           ; call [fn_write]
+	FF 35 08 18 40 00           ; push dword [out_handle]     # FileHandle
+	FF 15 B4 17 40 00           ; call [fn_write]
 	C3                          ; ret
 
 #:next_token ; (0x4010E2)
-:0
+:1
 
 #:.skip ; (0x4010E2)
 :C
@@ -273,33 +273,33 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 	C3                          ; ret
 
 #:open_file ; (0x401153)
-:1
-	89 0D AE 17 40 00           ; mov [g_access], ecx         # stash DesiredAccess
-	89 15 B2 17 40 00           ; mov [g_disp], edx           # stash CreateDisposition
+:2
+	89 0D C8 17 40 00           ; mov [g_access], ecx         # stash DesiredAccess
+	89 15 CC 17 40 00           ; mov [g_disp], edx           # stash CreateDisposition
 	6A 00                       ; push 0x0                    # DirectoryInfo
 	6A 00                       ; push 0x0                    # NtFileNamePart
-	68 D2 17 40 00              ; push nt_path                # NtPathName (UNICODE_STRING, ntdll allocates the buffer)
+	68 EC 17 40 00              ; push nt_path                # NtPathName (UNICODE_STRING, ntdll allocates the buffer)
 	50                          ; push eax                    # DosPathName
-	FF 15 A6 17 40 00           ; call [fn_rtlpath]           # resolves a relative path against the working directory
-	C7 05 BA 17 40 00 18 00 00 00 ; mov dword [oa], 0x18        # OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)
-	C7 05 BE 17 40 00 00 00 00 00 ; mov dword [oa+4], 0x0       # OBJECT_ATTRIBUTES.RootDirectory = NULL
-	C7 05 C2 17 40 00 D2 17 40 00 ; mov dword [oa+8], nt_path   # OBJECT_ATTRIBUTES.ObjectName = &nt_path
-	C7 05 C6 17 40 00 40 00 00 00 ; mov dword [oa+12], 0x40     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE
-	C7 05 CA 17 40 00 00 00 00 00 ; mov dword [oa+16], 0x0      # OBJECT_ATTRIBUTES.SecurityDescriptor = NULL
-	C7 05 CE 17 40 00 00 00 00 00 ; mov dword [oa+20], 0x0      # OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL
+	FF 15 C0 17 40 00           ; call [fn_rtlpath]           # resolves a relative path against the working directory
+	C7 05 D4 17 40 00 18 00 00 00 ; mov dword [oa], 0x18        # OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)
+	C7 05 D8 17 40 00 00 00 00 00 ; mov dword [oa+4], 0x0       # OBJECT_ATTRIBUTES.RootDirectory = NULL
+	C7 05 DC 17 40 00 EC 17 40 00 ; mov dword [oa+8], nt_path   # OBJECT_ATTRIBUTES.ObjectName = &nt_path
+	C7 05 E0 17 40 00 40 00 00 00 ; mov dword [oa+12], 0x40     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE
+	C7 05 E4 17 40 00 00 00 00 00 ; mov dword [oa+16], 0x0      # OBJECT_ATTRIBUTES.SecurityDescriptor = NULL
+	C7 05 E8 17 40 00 00 00 00 00 ; mov dword [oa+20], 0x0      # OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL
 	6A 00                       ; push 0x0                    # EaLength
 	6A 00                       ; push 0x0                    # EaBuffer
 	6A 60                       ; push 0x60                   # CreateOptions = FILE_SYNCHRONOUS_IO_NONALERT|FILE_NON_DIRECTORY_FILE
-	FF 35 B2 17 40 00           ; push dword [g_disp]         # CreateDisposition
+	FF 35 CC 17 40 00           ; push dword [g_disp]         # CreateDisposition
 	6A 01                       ; push 0x1                    # ShareAccess = FILE_SHARE_READ
 	68 80 00 00 00              ; push 0x80                   # FileAttributes = FILE_ATTRIBUTE_NORMAL (imm32: 6A 80 would sign-extend)
 	6A 00                       ; push 0x0                    # AllocationSize = NULL
-	68 DA 17 40 00              ; push iosb                   # IoStatusBlock
-	68 BA 17 40 00              ; push oa                     # ObjectAttributes
-	FF 35 AE 17 40 00           ; push dword [g_access]       # DesiredAccess
-	68 B6 17 40 00              ; push g_handle               # FileHandle (out)
-	FF 15 92 17 40 00           ; call [fn_create]
-	A1 B6 17 40 00              ; mov eax, [g_handle]
+	68 F4 17 40 00              ; push iosb                   # IoStatusBlock
+	68 D4 17 40 00              ; push oa                     # ObjectAttributes
+	FF 35 C8 17 40 00           ; push dword [g_access]       # DesiredAccess
+	68 D0 17 40 00              ; push g_handle               # FileHandle (out)
+	FF 15 AC 17 40 00           ; call [fn_create]
+	A1 D0 17 40 00              ; mov eax, [g_handle]
 	C3                          ; ret
 
 # consume_token(ebx = destination) -> eax = the character that ended it.
@@ -337,18 +337,18 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 # would otherwise be silently wrong, and everything above this link would inherit
 # the error.
 #:get_target ; (0x401228)
-:U
-	A3 16 18 40 00              ; mov [gt_name], eax
+:V
+	A3 30 18 40 00              ; mov [gt_name], eax
 	31 FF                       ; xor edi, edi                # index of the candidate label
 
 #:.gt ; (0x40122F)
 :Q
-	3B 3D 12 18 40 00           ; cmp edi, [nlab]
+	3B 3D 2C 18 40 00           ; cmp edi, [nlab]
 	0F 8D %M                    ; jge .gt_missing
 	89 FE                       ; mov esi, edi
 	C1 E6 06                    ; shl esi, 6                  # 64 bytes per name field
-	81 C6 34 1A 40 00           ; add esi, names
-	8B 15 16 18 40 00           ; mov edx, [gt_name]
+	81 C6 4E 1A 40 00           ; add esi, names
+	8B 15 30 18 40 00           ; mov edx, [gt_name]
 
 #:.gt_cmp ; (0x40124C)
 :P
@@ -368,25 +368,26 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 
 #:.gt_found ; (0x40126B)
 :O
-	8B 04 BD 34 1A 42 00        ; mov eax, [edi*4 + targets]
+	8B 04 BD 4E 1A 80 00        ; mov eax, [edi*4 + targets]
 	C3                          ; ret
 
 #:.gt_missing ; (0x401273)
 :M
 	6A 01                       ; push 0x1                    # ExitStatus = 1  -- an undefined label is fatal
 	6A FF                       ; push -0x1                   # ProcessHandle
-	FF 15 A2 17 40 00           ; call [fn_exit]
+	FF 15 BC 17 40 00           ; call [fn_exit]
 
 # store_label(): record the token that follows as a label at the current ip.
+# Aborts if the table of 65536 names is full, rather than writing past it.
 #:store_label ; (0x40127D)
-:m
-	BB 34 18 40 00              ; mov ebx, tok
+:n
+	BB 4E 18 40 00              ; mov ebx, tok
 	E8 %R                       ; call consume_token
-	8B 3D 12 18 40 00           ; mov edi, [nlab]
+	8B 3D 2C 18 40 00           ; mov edi, [nlab]
 	89 FE                       ; mov esi, edi
 	C1 E6 06                    ; shl esi, 6
-	81 C6 34 1A 40 00           ; add esi, names
-	BA 34 18 40 00              ; mov edx, tok
+	81 C6 4E 1A 40 00           ; add esi, names
+	BA 4E 18 40 00              ; mov edx, tok
 
 #:.sl_copy ; (0x40129D)
 :T
@@ -400,472 +401,480 @@ FA 15 00 00                     # AddressOfEntryPoint = 0x15fa -> _start
 
 #:.sl_done ; (0x4012B0)
 :S
-	A1 02 18 40 00              ; mov eax, [ip]
-	89 04 BD 34 1A 42 00        ; mov [edi*4 + targets], eax
-	83 05 12 18 40 00 01        ; add dword [nlab], 1
+	81 3D 2C 18 40 00 FF FF 00 00 ; cmp dword [nlab], 0xffff
+	0F 8D %U                    ; jge .sl_full
+	A1 1C 18 40 00              ; mov eax, [ip]
+	89 04 BD 4E 1A 80 00        ; mov [edi*4 + targets], eax
+	83 05 2C 18 40 00 01        ; add dword [nlab], 1
 	C3                          ; ret
+
+#:.sl_full ; (0x4012D4)
+:U
+	6A 02                       ; push 0x2                    # ExitStatus = 2  -- more labels than this hex2 was built to hold
+	6A FF                       ; push -0x1                   # ProcessHandle
+	FF 15 BC 17 40 00           ; call [fn_exit]
 
 # store_pointer(): emit one pointer, [p_width] bytes wide.
 # An absolute pointer is the target itself; a relative one is target - base,
 # where base is the position after the pointer unless a '>' named another
 # label.
-#:store_pointer ; (0x4012C4)
-:w
-	A1 1A 18 40 00              ; mov eax, [p_width]
-	01 05 02 18 40 00           ; add [ip], eax               # the pointer's own width is counted before the difference
-	BB 34 18 40 00              ; mov ebx, tok
+#:store_pointer ; (0x4012DE)
+:x
+	A1 34 18 40 00              ; mov eax, [p_width]
+	01 05 1C 18 40 00           ; add [ip], eax               # the pointer's own width is counted before the difference
+	BB 4E 18 40 00              ; mov ebx, tok
 	E8 %R                       ; call consume_token
-	A3 2A 18 40 00              ; mov [sep], eax              # the character that ended the token
-	B8 34 18 40 00              ; mov eax, tok
-	E8 %U                       ; call get_target
-	A3 22 18 40 00              ; mov [p_target], eax
-	A1 02 18 40 00              ; mov eax, [ip]
-	A3 26 18 40 00              ; mov [p_base], eax           # by default a displacement is measured from here
-	83 3D 2A 18 40 00 3E        ; cmp dword [sep], 0x3e       # was the token ended by '>'?
-	0F 85 %V                    ; jne .sp_have_base
-	BB 34 19 40 00              ; mov ebx, tok2
+	A3 44 18 40 00              ; mov [sep], eax              # the character that ended the token
+	B8 4E 18 40 00              ; mov eax, tok
+	E8 %V                       ; call get_target
+	A3 3C 18 40 00              ; mov [p_target], eax
+	A1 1C 18 40 00              ; mov eax, [ip]
+	A3 40 18 40 00              ; mov [p_base], eax           # by default a displacement is measured from here
+	83 3D 44 18 40 00 3E        ; cmp dword [sep], 0x3e       # was the token ended by '>'?
+	0F 85 %W                    ; jne .sp_have_base
+	BB 4E 19 40 00              ; mov ebx, tok2
 	E8 %R                       ; call consume_token          # the label naming the base
-	B8 34 19 40 00              ; mov eax, tok2
-	E8 %U                       ; call get_target
-	A3 26 18 40 00              ; mov [p_base], eax
+	B8 4E 19 40 00              ; mov eax, tok2
+	E8 %V                       ; call get_target
+	A3 40 18 40 00              ; mov [p_base], eax
 
-#:.sp_have_base ; (0x40131D)
-:V
-	A1 22 18 40 00              ; mov eax, [p_target]
-	83 3D 1E 18 40 00 00        ; cmp dword [p_abs], 0x0
-	0F 85 %W                    ; jne .sp_emit                # an absolute pointer is the target itself
-	2B 05 26 18 40 00           ; sub eax, [p_base]           # target - base
-
-#:.sp_emit ; (0x401335)
+#:.sp_have_base ; (0x401337)
 :W
-	A3 2E 18 40 00              ; mov [outbuf], eax           # little-endian; only the low [p_width] bytes are written
-	B8 2E 18 40 00              ; mov eax, outbuf
-	8B 0D 1A 18 40 00           ; mov ecx, [p_width]
-	E8 %X                       ; call write_n
+	A1 3C 18 40 00              ; mov eax, [p_target]
+	83 3D 38 18 40 00 00        ; cmp dword [p_abs], 0x0
+	0F 85 %X                    ; jne .sp_emit                # an absolute pointer is the target itself
+	2B 05 40 18 40 00           ; sub eax, [p_base]           # target - base
+
+#:.sp_emit ; (0x40134F)
+:X
+	A3 48 18 40 00              ; mov [outbuf], eax           # little-endian; only the low [p_width] bytes are written
+	B8 48 18 40 00              ; mov eax, outbuf
+	8B 0D 34 18 40 00           ; mov ecx, [p_width]
+	E8 %Y                       ; call write_n
 	C3                          ; ret
 
 # classify(eax = character) -> 1 if it introduces a pointer, else 0.
 #   !  one byte, relative      @  two bytes, relative     %  four bytes, relative
 #   $  two bytes, absolute     &  four bytes, absolute
-#:classify ; (0x40134B)
-:o
+#:classify ; (0x401365)
+:p
 	83 F8 21                    ; cmp eax, '!'
-	0F 84 %Y                    ; je .c_rel1
+	0F 84 %Z                    ; je .c_rel1
 	83 F8 40                    ; cmp eax, '@'
-	0F 84 %Z                    ; je .c_rel2
+	0F 84 %a                    ; je .c_rel2
 	83 F8 24                    ; cmp eax, '$'
-	0F 84 %a                    ; je .c_abs2
+	0F 84 %b                    ; je .c_abs2
 	83 F8 25                    ; cmp eax, '%'
-	0F 84 %b                    ; je .c_rel4
+	0F 84 %c                    ; je .c_rel4
 	83 F8 26                    ; cmp eax, '&'
-	0F 84 %c                    ; je .c_abs4
+	0F 84 %d                    ; je .c_abs4
 	31 C0                       ; xor eax, eax                # not a pointer
 	C3                          ; ret
 
-#:.c_rel1 ; (0x40137B)
-:Y
-	C7 05 1A 18 40 00 01 00 00 00 ; mov dword [p_width], 0x1
-	C7 05 1E 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
-	E9 %d                       ; jmp .c_yes
-
-#:.c_rel2 ; (0x401394)
+#:.c_rel1 ; (0x401395)
 :Z
-	C7 05 1A 18 40 00 02 00 00 00 ; mov dword [p_width], 0x2
-	C7 05 1E 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
-	E9 %d                       ; jmp .c_yes
+	C7 05 34 18 40 00 01 00 00 00 ; mov dword [p_width], 0x1
+	C7 05 38 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
+	E9 %e                       ; jmp .c_yes
 
-#:.c_rel4 ; (0x4013AD)
-:b
-	C7 05 1A 18 40 00 04 00 00 00 ; mov dword [p_width], 0x4
-	C7 05 1E 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
-	E9 %d                       ; jmp .c_yes
-
-#:.c_abs2 ; (0x4013C6)
+#:.c_rel2 ; (0x4013AE)
 :a
-	C7 05 1A 18 40 00 02 00 00 00 ; mov dword [p_width], 0x2
-	C7 05 1E 18 40 00 01 00 00 00 ; mov dword [p_abs], 0x1
-	E9 %d                       ; jmp .c_yes
+	C7 05 34 18 40 00 02 00 00 00 ; mov dword [p_width], 0x2
+	C7 05 38 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
+	E9 %e                       ; jmp .c_yes
 
-#:.c_abs4 ; (0x4013DF)
+#:.c_rel4 ; (0x4013C7)
 :c
-	C7 05 1A 18 40 00 04 00 00 00 ; mov dword [p_width], 0x4
-	C7 05 1E 18 40 00 01 00 00 00 ; mov dword [p_abs], 0x1
+	C7 05 34 18 40 00 04 00 00 00 ; mov dword [p_width], 0x4
+	C7 05 38 18 40 00 00 00 00 00 ; mov dword [p_abs], 0x0
+	E9 %e                       ; jmp .c_yes
 
-#:.c_yes ; (0x4013F3)
+#:.c_abs2 ; (0x4013E0)
+:b
+	C7 05 34 18 40 00 02 00 00 00 ; mov dword [p_width], 0x2
+	C7 05 38 18 40 00 01 00 00 00 ; mov dword [p_abs], 0x1
+	E9 %e                       ; jmp .c_yes
+
+#:.c_abs4 ; (0x4013F9)
 :d
+	C7 05 34 18 40 00 04 00 00 00 ; mov dword [p_width], 0x4
+	C7 05 38 18 40 00 01 00 00 00 ; mov dword [p_abs], 0x1
+
+#:.c_yes ; (0x40140D)
+:e
 	B8 01 00 00 00              ; mov eax, 0x1
 	C3                          ; ret
 
 # hex(eax = byte) -> 0-15, -1 for no value, or -4 at end of file.
-#:hex ; (0x4013F9)
-:q
+#:hex ; (0x401413)
+:r
 	83 F8 23                    ; cmp eax, '#'
-	0F 84 %e                    ; je comment
+	0F 84 %f                    ; je comment
 	83 F8 3B                    ; cmp eax, ';'
-	0F 84 %e                    ; je comment
+	0F 84 %f                    ; je comment
 	83 F8 30                    ; cmp eax, '0'
-	0F 8C %f                    ; jl other
+	0F 8C %g                    ; jl other
 	83 F8 3A                    ; cmp eax, '9'+1
-	0F 8C %g                    ; jl num
+	0F 8C %h                    ; jl num
 	83 F8 41                    ; cmp eax, 'A'
-	0F 8C %f                    ; jl other
+	0F 8C %g                    ; jl other
 	83 F8 47                    ; cmp eax, 'F'+1
-	0F 8C %h                    ; jl high
+	0F 8C %i                    ; jl high
 	83 F8 61                    ; cmp eax, 'a'
-	0F 8C %f                    ; jl other
+	0F 8C %g                    ; jl other
 	83 F8 67                    ; cmp eax, 'f'+1
-	0F 8C %i                    ; jl low
-	E9 %f                       ; jmp other
+	0F 8C %j                    ; jl low
+	E9 %g                       ; jmp other
 
-#:comment ; (0x401446)
-:e
+#:comment ; (0x401460)
+:f
 	E8 %J                       ; call read_byte
 	83 F8 FC                    ; cmp eax, -4
-	0F 84 %j                    ; je .ceof
+	0F 84 %k                    ; je .ceof
 	83 F8 0A                    ; cmp eax, '\n'
-	0F 85 %e                    ; jne comment
-	E9 %f                       ; jmp other
+	0F 85 %f                    ; jne comment
+	E9 %g                       ; jmp other
 
-#:.ceof ; (0x401462)
-:j
+#:.ceof ; (0x40147C)
+:k
 	B8 FC FF FF FF              ; mov eax, -0x4
 	C3                          ; ret
 
-#:num ; (0x401468)
-:g
+#:num ; (0x401482)
+:h
 	83 E8 30                    ; sub eax, '0'
 	C3                          ; ret
 
-#:low ; (0x40146C)
-:i
+#:low ; (0x401486)
+:j
 	83 E8 57                    ; sub eax, 'a'-10
 	C3                          ; ret
 
-#:high ; (0x401470)
-:h
+#:high ; (0x40148A)
+:i
 	83 E8 37                    ; sub eax, 'A'-10
 	C3                          ; ret
 
-#:other ; (0x401474)
-:f
+#:other ; (0x40148E)
+:g
 	B8 FF FF FF FF              ; mov eax, -0x1
 	C3                          ; ret
 
 # Read the input, recording where each label lands.
 # Nothing is written; ip advances by one per completed byte pair and by the
 # pointer's width per pointer.
-#:first_pass ; (0x40147A)
-:2
+#:first_pass ; (0x401494)
+:3
 
-#:.fp ; (0x40147A)
-:n
+#:.fp ; (0x401494)
+:o
 	E8 %J                       ; call read_byte
 	83 F8 FC                    ; cmp eax, -4
-	0F 84 %k                    ; je .fp_done
+	0F 84 %l                    ; je .fp_done
 	83 F8 3A                    ; cmp eax, ':'
-	0F 85 %l                    ; jne .fp_ptr
-	E8 %m                       ; call store_label
-	E9 %n                       ; jmp .fp
+	0F 85 %m                    ; jne .fp_ptr
+	E8 %n                       ; call store_label
+	E9 %o                       ; jmp .fp
 
-#:.fp_ptr ; (0x40149B)
-:l
-	A3 0E 18 40 00              ; mov [cur], eax              # hex may consume a comment, so keep the character
-	E8 %o                       ; call classify
+#:.fp_ptr ; (0x4014B5)
+:m
+	A3 28 18 40 00              ; mov [cur], eax              # hex may consume a comment, so keep the character
+	E8 %p                       ; call classify
 	85 C0                       ; test eax, eax
-	0F 84 %p                    ; je .fp_other
-	A1 1A 18 40 00              ; mov eax, [p_width]
-	01 05 02 18 40 00           ; add [ip], eax
-	BB 34 18 40 00              ; mov ebx, tok
+	0F 84 %q                    ; je .fp_other
+	A1 34 18 40 00              ; mov eax, [p_width]
+	01 05 1C 18 40 00           ; add [ip], eax
+	BB 4E 18 40 00              ; mov ebx, tok
 	E8 %R                       ; call consume_token          # the label name; only its width matters here
 	83 F8 3E                    ; cmp eax, '>'
-	0F 85 %n                    ; jne .fp
-	BB 34 18 40 00              ; mov ebx, tok
+	0F 85 %o                    ; jne .fp
+	BB 4E 18 40 00              ; mov ebx, tok
 	E8 %R                       ; call consume_token          # and the base label
-	E9 %n                       ; jmp .fp
+	E9 %o                       ; jmp .fp
 
-#:.fp_other ; (0x4014DA)
-:p
-	A1 0E 18 40 00              ; mov eax, [cur]
-	E8 %q                       ; call hex
+#:.fp_other ; (0x4014F4)
+:q
+	A1 28 18 40 00              ; mov eax, [cur]
+	E8 %r                       ; call hex
 	83 F8 FC                    ; cmp eax, -4
-	0F 84 %k                    ; je .fp_done
+	0F 84 %l                    ; je .fp_done
 	83 F8 00                    ; cmp eax, 0
-	0F 8C %n                    ; jl .fp
-	83 3D 06 18 40 00 00        ; cmp dword [toggle], 0x0
-	0F 84 %r                    ; je .fp_tog
-	83 05 02 18 40 00 01        ; add dword [ip], 1
+	0F 8C %o                    ; jl .fp
+	83 3D 20 18 40 00 00        ; cmp dword [toggle], 0x0
+	0F 84 %s                    ; je .fp_tog
+	83 05 1C 18 40 00 01        ; add dword [ip], 1
 
-#:.fp_tog ; (0x40150A)
-:r
-	F7 15 06 18 40 00           ; not dword [toggle]
-	E9 %n                       ; jmp .fp
+#:.fp_tog ; (0x401524)
+:s
+	F7 15 20 18 40 00           ; not dword [toggle]
+	E9 %o                       ; jmp .fp
 
-#:.fp_done ; (0x401515)
-:k
+#:.fp_done ; (0x40152F)
+:l
 	C3                          ; ret
 
 # Seek the input back to the start for the second pass.
-#:rewind_input ; (0x401516)
-:3
-	C7 05 E2 17 40 00 00 00 00 00 ; mov dword [filepos], 0x0
-	C7 05 E6 17 40 00 00 00 00 00 ; mov dword [filepos+4], 0x0
+#:rewind_input ; (0x401530)
+:4
+	C7 05 FC 17 40 00 00 00 00 00 ; mov dword [filepos], 0x0
+	C7 05 00 18 40 00 00 00 00 00 ; mov dword [filepos+4], 0x0
 	6A 0E                       ; push 0xe                    # FilePositionInformation
 	6A 08                       ; push 0x8                    # Length
-	68 E2 17 40 00              ; push filepos
-	68 DA 17 40 00              ; push iosb
-	FF 35 EA 17 40 00           ; push dword [in_handle]
-	FF 15 AA 17 40 00           ; call [fn_setinfo]           # the NT equivalent of upstream's lseek
+	68 FC 17 40 00              ; push filepos
+	68 F4 17 40 00              ; push iosb
+	FF 35 04 18 40 00           ; push dword [in_handle]
+	FF 15 C4 17 40 00           ; call [fn_setinfo]           # the NT equivalent of upstream's lseek
 	C3                          ; ret
 
 # Read the input again, emitting bytes and resolving pointers.
-#:second_pass ; (0x401545)
-:4
+#:second_pass ; (0x40155F)
+:5
 
-#:.sp2 ; (0x401545)
-:u
+#:.sp2 ; (0x40155F)
+:v
 	E8 %J                       ; call read_byte
 	83 F8 FC                    ; cmp eax, -4
-	0F 84 %s                    ; je .sp2_done
+	0F 84 %t                    ; je .sp2_done
 	83 F8 3A                    ; cmp eax, ':'
-	0F 85 %t                    ; jne .sp2_ptr
-	BB 34 18 40 00              ; mov ebx, tok
+	0F 85 %u                    ; jne .sp2_ptr
+	BB 4E 18 40 00              ; mov ebx, tok
 	E8 %R                       ; call consume_token          # the label is already recorded; drop it
-	E9 %u                       ; jmp .sp2
+	E9 %v                       ; jmp .sp2
 
-#:.sp2_ptr ; (0x40156B)
-:t
-	A3 0E 18 40 00              ; mov [cur], eax
-	E8 %o                       ; call classify
+#:.sp2_ptr ; (0x401585)
+:u
+	A3 28 18 40 00              ; mov [cur], eax
+	E8 %p                       ; call classify
 	85 C0                       ; test eax, eax
-	0F 84 %v                    ; je .sp2_other
-	E8 %w                       ; call store_pointer
-	E9 %u                       ; jmp .sp2
+	0F 84 %w                    ; je .sp2_other
+	E8 %x                       ; call store_pointer
+	E9 %v                       ; jmp .sp2
 
-#:.sp2_other ; (0x401587)
-:v
-	A1 0E 18 40 00              ; mov eax, [cur]
-	E8 %q                       ; call hex
+#:.sp2_other ; (0x4015A1)
+:w
+	A1 28 18 40 00              ; mov eax, [cur]
+	E8 %r                       ; call hex
 	83 F8 FC                    ; cmp eax, -4
-	0F 84 %s                    ; je .sp2_done
+	0F 84 %t                    ; je .sp2_done
 	83 F8 00                    ; cmp eax, 0
-	0F 8C %u                    ; jl .sp2
-	83 3D 06 18 40 00 00        ; cmp dword [toggle], 0x0
-	0F 84 %x                    ; je .sp2_print
-	A3 0A 18 40 00              ; mov [accum], eax
-	C7 05 06 18 40 00 00 00 00 00 ; mov dword [toggle], 0x0
-	E9 %u                       ; jmp .sp2
+	0F 8C %v                    ; jl .sp2
+	83 3D 20 18 40 00 00        ; cmp dword [toggle], 0x0
+	0F 84 %y                    ; je .sp2_print
+	A3 24 18 40 00              ; mov [accum], eax
+	C7 05 20 18 40 00 00 00 00 00 ; mov dword [toggle], 0x0
+	E9 %v                       ; jmp .sp2
 
-#:.sp2_print ; (0x4015C4)
-:x
-	8B 0D 0A 18 40 00           ; mov ecx, [accum]
+#:.sp2_print ; (0x4015DE)
+:y
+	8B 0D 24 18 40 00           ; mov ecx, [accum]
 	C1 E1 04                    ; shl ecx, 4
 	01 C8                       ; add eax, ecx
-	A2 33 18 40 00              ; mov [output], al
-	C7 05 06 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
-	83 05 02 18 40 00 01        ; add dword [ip], 1
-	B8 33 18 40 00              ; mov eax, output
+	A2 4D 18 40 00              ; mov [output], al
+	C7 05 20 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
+	83 05 1C 18 40 00 01        ; add dword [ip], 1
+	B8 4D 18 40 00              ; mov eax, output
 	B9 01 00 00 00              ; mov ecx, 0x1
-	E8 %X                       ; call write_n
-	E9 %u                       ; jmp .sp2
+	E8 %Y                       ; call write_n
+	E9 %v                       ; jmp .sp2
 
-#:.sp2_done ; (0x4015F9)
-:s
+#:.sp2_done ; (0x401613)
+:t
 	C3                          ; ret
 
 # Resolve the seven ntdll routines, open both files, run the two passes.
-#:_start ; (0x4015FA)
-	E8 %y                       ; call find_ntdll
+#:_start ; (0x401614)
+	E8 %z                       ; call find_ntdll
 	89 C3                       ; mov ebx, eax                # ntdll base
-	68 21 17 40 00              ; push name_NtCreateFile
+	68 3B 17 40 00              ; push name_NtCreateFile
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 92 17 40 00              ; mov [fn_create], eax
-	68 2E 17 40 00              ; push name_NtReadFile
+	E8 %0                       ; call resolve_export
+	A3 AC 17 40 00              ; mov [fn_create], eax
+	68 48 17 40 00              ; push name_NtReadFile
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 96 17 40 00              ; mov [fn_read], eax
-	68 39 17 40 00              ; push name_NtWriteFile
+	E8 %0                       ; call resolve_export
+	A3 B0 17 40 00              ; mov [fn_read], eax
+	68 53 17 40 00              ; push name_NtWriteFile
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 9A 17 40 00              ; mov [fn_write], eax
-	68 45 17 40 00              ; push name_NtClose
+	E8 %0                       ; call resolve_export
+	A3 B4 17 40 00              ; mov [fn_write], eax
+	68 5F 17 40 00              ; push name_NtClose
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 9E 17 40 00              ; mov [fn_close], eax
-	68 4D 17 40 00              ; push name_NtTerminateProcess
+	E8 %0                       ; call resolve_export
+	A3 B8 17 40 00              ; mov [fn_close], eax
+	68 67 17 40 00              ; push name_NtTerminateProcess
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 A2 17 40 00              ; mov [fn_exit], eax
-	68 75 17 40 00              ; push name_RtlDosPath
+	E8 %0                       ; call resolve_export
+	A3 BC 17 40 00              ; mov [fn_exit], eax
+	68 8F 17 40 00              ; push name_RtlDosPath
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 A6 17 40 00              ; mov [fn_rtlpath], eax
-	68 60 17 40 00              ; push name_NtSetInformationFile
+	E8 %0                       ; call resolve_export
+	A3 C0 17 40 00              ; mov [fn_rtlpath], eax
+	68 7A 17 40 00              ; push name_NtSetInformationFile
 	53                          ; push ebx                    # module_base
-	E8 %z                       ; call resolve_export
-	A3 AA 17 40 00              ; mov [fn_setinfo], eax
+	E8 %0                       ; call resolve_export
+	A3 C4 17 40 00              ; mov [fn_setinfo], eax
 	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # PEB
 	8B 40 10                    ; mov eax, [eax+0x10]         # PEB->ProcessParameters
 	8B 70 44                    ; mov esi, [eax+0x44]         # ProcessParameters->CommandLine.Buffer (UNICODE_STRING at 0x40, Buffer at +4)
-	E8 %0                       ; call next_token             # argv[0]: the program name, discarded
-	E8 %0                       ; call next_token             # argv[1]: the input path
-	A3 F2 17 40 00              ; mov [arg_in], eax
-	E8 %0                       ; call next_token             # argv[2]: the output path
-	A3 F6 17 40 00              ; mov [arg_out], eax
-	A1 F2 17 40 00              ; mov eax, [arg_in]
+	E8 %1                       ; call next_token             # argv[0]: the program name, discarded
+	E8 %1                       ; call next_token             # argv[1]: the input path
+	A3 0C 18 40 00              ; mov [arg_in], eax
+	E8 %1                       ; call next_token             # argv[2]: the output path
+	A3 10 18 40 00              ; mov [arg_out], eax
+	A1 0C 18 40 00              ; mov eax, [arg_in]
 	B9 00 00 10 80              ; mov ecx, 0x80100000         # GENERIC_READ|SYNCHRONIZE
 	BA 01 00 00 00              ; mov edx, 0x1                # FILE_OPEN
-	E8 %1                       ; call open_file
-	A3 EA 17 40 00              ; mov [in_handle], eax
-	A1 F6 17 40 00              ; mov eax, [arg_out]
+	E8 %2                       ; call open_file
+	A3 04 18 40 00              ; mov [in_handle], eax
+	A1 10 18 40 00              ; mov eax, [arg_out]
 	B9 00 00 10 40              ; mov ecx, 0x40100000         # GENERIC_WRITE|SYNCHRONIZE
 	BA 05 00 00 00              ; mov edx, 0x5                # FILE_OVERWRITE_IF
-	E8 %1                       ; call open_file
-	A3 EE 17 40 00              ; mov [out_handle], eax
-	C7 05 02 18 40 00 00 00 40 00 ; mov dword [ip], 0x400000    # labels hold absolute addresses, so ip starts at the image base
-	C7 05 06 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
-	E8 %2                       ; call first_pass
-	E8 %3                       ; call rewind_input
-	C7 05 02 18 40 00 00 00 40 00 ; mov dword [ip], 0x400000
-	C7 05 06 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
-	E8 %4                       ; call second_pass
-	FF 35 EE 17 40 00           ; push dword [out_handle]
-	FF 15 9E 17 40 00           ; call [fn_close]
-	FF 35 EA 17 40 00           ; push dword [in_handle]
-	FF 15 9E 17 40 00           ; call [fn_close]
+	E8 %2                       ; call open_file
+	A3 08 18 40 00              ; mov [out_handle], eax
+	C7 05 1C 18 40 00 00 00 40 00 ; mov dword [ip], 0x400000    # labels hold absolute addresses, so ip starts at the image base
+	C7 05 20 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
+	E8 %3                       ; call first_pass
+	E8 %4                       ; call rewind_input
+	C7 05 1C 18 40 00 00 00 40 00 ; mov dword [ip], 0x400000
+	C7 05 20 18 40 00 FF FF FF FF ; mov dword [toggle], -0x1
+	E8 %5                       ; call second_pass
+	FF 35 08 18 40 00           ; push dword [out_handle]
+	FF 15 B8 17 40 00           ; call [fn_close]
+	FF 35 04 18 40 00           ; push dword [in_handle]
+	FF 15 B8 17 40 00           ; call [fn_close]
 	6A 00                       ; push 0x0                    # ExitStatus = 0
 	6A FF                       ; push -0x1                   # ProcessHandle
-	FF 15 A2 17 40 00           ; call [fn_exit]
+	FF 15 BC 17 40 00           ; call [fn_exit]
 
 ## ==== .data ====
 
 # Export names, matched by resolve_export.
-#:name_NtCreateFile ; (0x401721)
+#:name_NtCreateFile ; (0x40173B)
 4E 74 43 72 65 61 74 65 46 69 6C 65 00 # name_NtCreateFile = "NtCreateFile"
 
-#:name_NtReadFile ; (0x40172E)
+#:name_NtReadFile ; (0x401748)
 4E 74 52 65 61 64 46 69 6C 65 00 # name_NtReadFile = "NtReadFile"
 
-#:name_NtWriteFile ; (0x401739)
+#:name_NtWriteFile ; (0x401753)
 4E 74 57 72 69 74 65 46 69 6C 65 00 # name_NtWriteFile = "NtWriteFile"
 
-#:name_NtClose ; (0x401745)
+#:name_NtClose ; (0x40175F)
 4E 74 43 6C 6F 73 65 00         # name_NtClose = "NtClose"
 
-#:name_NtTerminateProcess ; (0x40174D)
+#:name_NtTerminateProcess ; (0x401767)
 4E 74 54 65 72 6D 69 6E 61 74 65 50 72 6F 63 65 73 73 00 # name_NtTerminateProcess = "NtTerminateProcess"
 
-#:name_NtSetInformationFile ; (0x401760)
+#:name_NtSetInformationFile ; (0x40177A)
 4E 74 53 65 74 49 6E 66 6F 72 6D 61 74 69 6F 6E 46 69 6C 65 00 # name_NtSetInformationFile = "NtSetInformationFile"
 
-#:name_RtlDosPath ; (0x401775)
+#:name_RtlDosPath ; (0x40178F)
 52 74 6C 44 6F 73 50 61 74 68 4E 61 6D 65 54 6F 4E 74 50 61 74 68 4E 61 6D 65 5F 55 00 # name_RtlDosPath = "RtlDosPathNameToNtPathName_U"
 
-#:fn_create ; (0x401792)
+#:fn_create ; (0x4017AC)
 00 00 00 00
 
-#:fn_read ; (0x401796)
+#:fn_read ; (0x4017B0)
 00 00 00 00
 
-#:fn_write ; (0x40179A)
+#:fn_write ; (0x4017B4)
 00 00 00 00
 
-#:fn_close ; (0x40179E)
+#:fn_close ; (0x4017B8)
 00 00 00 00
 
-#:fn_exit ; (0x4017A2)
+#:fn_exit ; (0x4017BC)
 00 00 00 00
 
-#:fn_rtlpath ; (0x4017A6)
+#:fn_rtlpath ; (0x4017C0)
 00 00 00 00
 
-#:fn_setinfo ; (0x4017AA)
+#:fn_setinfo ; (0x4017C4)
 00 00 00 00
 
-#:g_access ; (0x4017AE)
+#:g_access ; (0x4017C8)
 00 00 00 00
 
-#:g_disp ; (0x4017B2)
+#:g_disp ; (0x4017CC)
 00 00 00 00
 
-#:g_handle ; (0x4017B6)
+#:g_handle ; (0x4017D0)
 00 00 00 00
 
-#:oa ; (0x4017BA)
+#:oa ; (0x4017D4)
 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 # OBJECT_ATTRIBUTES
 
-#:nt_path ; (0x4017D2)
+#:nt_path ; (0x4017EC)
 00 00 00 00 00 00 00 00
 
-#:iosb ; (0x4017DA)
+#:iosb ; (0x4017F4)
 00 00 00 00 00 00 00 00
 
-#:filepos ; (0x4017E2)
+#:filepos ; (0x4017FC)
 00 00 00 00 00 00 00 00
 
-#:in_handle ; (0x4017EA)
+#:in_handle ; (0x401804)
 00 00 00 00
 
-#:out_handle ; (0x4017EE)
+#:out_handle ; (0x401808)
 00 00 00 00
 
-#:arg_in ; (0x4017F2)
+#:arg_in ; (0x40180C)
 00 00 00 00
 
-#:arg_out ; (0x4017F6)
+#:arg_out ; (0x401810)
 00 00 00 00
 
-#:w_buf ; (0x4017FA)
+#:w_buf ; (0x401814)
 00 00 00 00
 
-#:w_len ; (0x4017FE)
+#:w_len ; (0x401818)
 00 00 00 00
 
 # Conversion state.  ip is an absolute address, so a label's value is one too.
-#:ip ; (0x401802)
+#:ip ; (0x40181C)
 00 00 00 00                     # output position, an absolute address
 
-#:toggle ; (0x401806)
+#:toggle ; (0x401820)
 FF FF FF FF
 
-#:accum ; (0x40180A)
+#:accum ; (0x401824)
 00 00 00 00
 
-#:cur ; (0x40180E)
+#:cur ; (0x401828)
 00 00 00 00
 
-#:nlab ; (0x401812)
+#:nlab ; (0x40182C)
 00 00 00 00                     # number of labels recorded
 
-#:gt_name ; (0x401816)
+#:gt_name ; (0x401830)
 00 00 00 00
 
-#:p_width ; (0x40181A)
+#:p_width ; (0x401834)
 00 00 00 00                     # the pointer being emitted
 
-#:p_abs ; (0x40181E)
+#:p_abs ; (0x401838)
 00 00 00 00
 
-#:p_target ; (0x401822)
+#:p_target ; (0x40183C)
 00 00 00 00
 
-#:p_base ; (0x401826)
+#:p_base ; (0x401840)
 00 00 00 00
 
-#:sep ; (0x40182A)
+#:sep ; (0x401844)
 00 00 00 00
 
-#:outbuf ; (0x40182E)
+#:outbuf ; (0x401848)
 00 00 00 00
 
-#:input ; (0x401832)
+#:input ; (0x40184C)
 00
 
-#:output ; (0x401833)
+#:output ; (0x40184D)
 00
 
 ## ==== reserved, zero-filled by the loader (past the end of the file) ====
-#:tok ; (0x401834) 256 bytes  -- the token being read
-#:tok2 ; (0x401934) 256 bytes  -- the base label after '>'
-#:names ; (0x401A34) 131072 bytes  -- 2048 name fields of 64 bytes
-#:targets ; (0x421A34) 8192 bytes  -- one address per name
+#:tok ; (0x40184E) 256 bytes  -- the token being read
+#:tok2 ; (0x40194E) 256 bytes  -- the base label after '>'
+#:names ; (0x401A4E) 4194304 bytes  -- 65536 name fields of 64 bytes
+#:targets ; (0x801A4E) 262144 bytes  -- one address per name

@@ -102,12 +102,18 @@
 
 # next_token() -> eax = the next argument, or 0 when exhausted.
 # esi is the cursor into the command line.  Characters are UTF-16, so it advances
-# two bytes at a time, and the terminator is overwritten with a NUL in place.
+# two bytes at a time, and the terminator is overwritten with a NUL in place.  A
+# separator is space or tab; see emit_next_token's own docstring for why tab
+# matters here.
 :next_token
 
 :.skip
 	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 84 %.skip_adv            ; je .skip_adv
+	66 83 3E 09                 ; cmp word [esi], TAB
 	0F 85 %.tok_start           ; jne .tok_start
+
+:.skip_adv
 	83 C6 02                    ; add esi, 2
 	E9 %.skip                   ; jmp .skip
 
@@ -122,6 +128,8 @@
 	66 83 3E 00                 ; cmp word [esi], 0
 	0F 84 %.done                ; je .done                    # last token, already NUL-terminated
 	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 84 %.cut                 ; je .cut
+	66 83 3E 09                 ; cmp word [esi], TAB
 	0F 84 %.cut                 ; je .cut
 	83 C6 02                    ; add esi, 2
 	E9 %.scan                   ; jmp .scan
@@ -149,11 +157,13 @@
 	31 C0                       ; xor eax, eax                # no token
 	C3                          ; ret
 
-# open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition) -> handle.
+# open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition)
+# -> handle, or 0 if the file could not be opened.
 # RtlDosPathNameToNtPathName_U turns the DOS path into the NT path NtCreateFile
 # needs, resolving a relative path against the working directory.
 # FILE_SYNCHRONOUS_IO_NONALERT keeps the file position in the I/O manager, which
 # is why every read and write passes a NULL ByteOffset and still advances.
+# The path is UTF-16, which is the only kind ntdll takes.
 :open_file
 	89 0D &g_access             ; mov [g_access], ecx         # stash DesiredAccess
 	89 15 &g_disp               ; mov [g_disp], edx           # stash CreateDisposition
@@ -180,7 +190,13 @@
 	FF 35 &g_access             ; push dword [g_access]       # DesiredAccess
 	68 &g_handle                ; push g_handle               # FileHandle (out)
 	FF 15 &fn_create            ; call [fn_create]
+	85 C0                       ; test eax, eax               # NTSTATUS < 0 is a failure to open
+	0F 88 %open_file.fail       ; js open_file.fail
 	A1 &g_handle                ; mov eax, [g_handle]
+	C3                          ; ret
+
+:open_file.fail
+	31 C0                       ; xor eax, eax                # 0, which is what fopen in C tests for
 	C3                          ; ret
 
 # fgetc() -> eax = the next byte of the input, or -4 at end of file.

@@ -14,7 +14,7 @@ a = Asm()
 
 emit_find_ntdll(a)
 emit_resolve_export(a)
-emit_next_token(a)
+emit_next_token(a, tabs=True)
 emit_open_file(a)
 
 a.label("_start")

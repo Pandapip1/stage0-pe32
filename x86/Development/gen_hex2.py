@@ -9,7 +9,7 @@ import sys, struct
 from stage0asm import *
 
 OUT_BASE = 0x400000   # ip starts at the image base of the PE hex2 emits
-NLAB, FIELD = 2048, 64
+NLAB, FIELD = 65536, 64
 
 a = Asm()
 emit_find_ntdll(a)
@@ -96,10 +96,16 @@ a.raw(b"\x84\xc9", "test cl, cl"); a.jcc("e", ".sl_done")
 a.raw(b"\x42", "inc edx"); a.raw(b"\x46", "inc esi")
 a.jmp(".sl_copy")
 a.label(".sl_done")
+a.cmp_mem_imm32("nlab", NLAB - 1)
+a.jcc("ge", ".sl_full")
 a.mov_r_mem("eax", "ip")
 a.mov_idx4_eax("targets")
 a.add_mem_imm8("nlab", 1)
 a.ret()
+a.label(".sl_full")
+a.push_imm(2, "ExitStatus = 2  -- more labels than this hex2 was built to hold")
+a.push_imm(-1, "ProcessHandle")
+a.call_mem("fn_exit")
 
 # ---- store_pointer: emit one pointer.  [p_width] and [p_abs] chosen by caller ----
 a.label("store_pointer")
@@ -292,7 +298,8 @@ is returned because '>' means a base label follows.""",
 A linear scan of the recorded names.  An undefined label is fatal: the address
 would otherwise be silently wrong, and everything above this link would inherit
 the error.""",
-"store_label": "store_label(): record the token that follows as a label at the current ip.",
+"store_label": """store_label(): record the token that follows as a label at the current ip.
+Aborts if the table of %d names is full, rather than writing past it.""" % NLAB,
 "store_pointer": """store_pointer(): emit one pointer, [p_width] bytes wide.
 An absolute pointer is the target itself; a relative one is target - base,
 where base is the position after the pointer unless a '>' named another

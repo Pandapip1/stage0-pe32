@@ -38,7 +38,7 @@ SizeOfRawData, by contrast, is left exactly as long as the program is, and no
 multiple of FileAlignment, which Windows does accept.
 
 The section's VirtualSize runs to the top of the image, so everything between
-the end of the file and 0x1400000 is zero-filled writable memory.  A program
+the end of the file and 0x8400000 is zero-filled writable memory.  A program
 declares a buffer by putting a label after :PE_end and never has to ask for
 memory at run time.
 
