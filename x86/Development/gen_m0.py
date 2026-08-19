@@ -12,6 +12,7 @@ of M0_x86.hex2.
 import sys, struct
 from stage0asm import *
 from pe32emit import emit_pe_hex2
+from pe32shared import emit_shared, SHARED_DOC, BOUNDARY
 
 a = Asm()
 
@@ -24,38 +25,7 @@ STRSZ = 256          # upstream calloc's 64 and never bounds-checks; this is the
 def I(hx, mn, prose=None):
     a.raw(bytes.fromhex(hx.replace(" ", "")), a._c(mn, prose))
 
-emit_find_ntdll(a)
-emit_resolve_export(a)
-emit_next_token(a)
-emit_open_file(a)
-
-# ---------------------------------------------------------------- fgetc
-a.label("fgetc")
-a.push_imm(0, "Key")
-a.push_imm(0, "ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position")
-a.push_imm(1, "Length = 1")
-a.push_lbl("inbuf", "Buffer")
-a.push_lbl("iosb", "IoStatusBlock")
-a.push_imm(0, "ApcContext"); a.push_imm(0, "ApcRoutine"); a.push_imm(0, "Event")
-a.push_mem("in_handle", "FileHandle")
-a.call_mem("fn_read")
-I("85 C0", "test eax, eax", "NTSTATUS < 0 (STATUS_END_OF_FILE) is the end")
-a.jcc("s", "fgetc.eof", "js fgetc.eof")
-a.movzx_eax_mem("inbuf", "movzx eax, byte [inbuf]")
-a.ret("ret")
-a.label("fgetc.eof")
-a.mov_r_imm("eax", -4, "mov eax, -4  -- EOF, as upstream reports it")
-a.ret("ret")
-
-# ---------------------------------------------------------------- fputc
-a.label("fputc")
-a.mov_mem_al("outbuf", "mov [outbuf], al")
-a.push_imm(0, "Key"); a.push_imm(0, "ByteOffset"); a.push_imm(1, "Length = 1")
-a.push_lbl("outbuf", "Buffer"); a.push_lbl("iosb", "IoStatusBlock")
-a.push_imm(0, "ApcContext"); a.push_imm(0, "ApcRoutine"); a.push_imm(0, "Event")
-a.push_mem("out_handle", "FileHandle")
-a.call_mem("fn_write")
-a.ret("ret")
+emit_shared(a)
 
 # ---------------------------------------------------------------- malloc
 a.label("malloc")
@@ -551,27 +521,9 @@ a.ret("ret")
 
 # ---------------------------------------------------------------- _start
 a.label("_start")
-a.call("find_ntdll", "call find_ntdll")
-I("89 C3", "mov ebx, eax", "ntdll base, held across every resolve_export call")
-for slot, nm in [("fn_create","name_NtCreateFile"), ("fn_read","name_NtReadFile"),
-                 ("fn_write","name_NtWriteFile"), ("fn_close","name_NtClose"),
-                 ("fn_exit","name_NtTerminateProcess"), ("fn_rtlpath","name_RtlDosPath")]:
-    a.push_lbl(nm)
-    a.push_r("ebx", "module_base")
-    a.call("resolve_export", "call resolve_export")
-    a.mov_mem_r(slot, "eax")
+a.call("resolve_all", "call resolve_all")
 a.mov_mem_lbl("malloc_ptr", "arena", "mov dword [malloc_ptr], arena  -- the loader zeroed it for us")
-emit_cmdline(a)
-a.mov_r_mem("eax", "arg_in", "mov eax, [arg_in]")
-a.mov_r_imm("ecx", 0x80100000, "GENERIC_READ|SYNCHRONIZE")
-a.mov_r_imm("edx", 1, "FILE_OPEN")
-a.call("open_file", "call open_file")
-a.mov_mem_r("in_handle", "eax", "mov [in_handle], eax")
-a.mov_r_mem("eax", "arg_out", "mov eax, [arg_out]")
-a.mov_r_imm("ecx", 0x40100000, "GENERIC_WRITE|SYNCHRONIZE")
-a.mov_r_imm("edx", 5, "FILE_OVERWRITE_IF")
-a.call("open_file", "call open_file")
-a.mov_mem_r("out_handle", "eax", "mov [out_handle], eax")
+a.call("open_argv", "call open_argv")
 a.label("_start.tokenize")
 a.call("Tokenize_Line", "call Tokenize_Line")
 a.mov_r_mem("eax", "eof_flag", "mov eax, [eof_flag]")
@@ -587,13 +539,7 @@ for fn in ["Identify_Macros", "Line_Macro", "Process_String",
     a.mov_r_mem("eax", "head", "mov eax, [head]")
     a.call(fn, "call %s" % fn)
 a.label("_start.done")
-a.push_mem("out_handle", "push out_handle")
-a.call_mem("fn_close")
-a.push_mem("in_handle", "push in_handle")
-a.call_mem("fn_close")
-a.push_imm(0, "ExitStatus = 0")
-a.push_imm(-1, "ProcessHandle = NtCurrentProcess pseudo-handle")
-a.call_mem("fn_exit")
+a.jmp("exit_ok", "jmp exit_ok  -- closes both files and exits 0")
 
 # ===================== .data =====================
 def asciiz(name, s):
@@ -603,64 +549,22 @@ def dd(name, v, note):
 def space(name, n, note):
     a.label(name); a.raw(b"\x00" * n, note)
 
-asciiz("name_NtCreateFile", "NtCreateFile")
-asciiz("name_NtReadFile", "NtReadFile")
-asciiz("name_NtWriteFile", "NtWriteFile")
-asciiz("name_NtClose", "NtClose")
-asciiz("name_NtTerminateProcess", "NtTerminateProcess")
-asciiz("name_RtlDosPath", "RtlDosPathNameToNtPathName_U")
+a.label("M0_data")
 asciiz("DEFINE_str", "DEFINE")
 a.label("terminators"); a.raw(b"\x0a\x0d\x09\x20\x00", 'terminators = "\\n\\r\\t "')
 a.label("comments");    a.raw(b"\x3b\x23\x00", 'comments = ";#"')
 a.label("string_char"); a.raw(b"\x22\x27\x00", 'string_char = "\\"\'"')
-dd("fn_create", 0, "fn_create: resolved NtCreateFile")
-dd("fn_read", 0, "fn_read: resolved NtReadFile")
-dd("fn_write", 0, "fn_write: resolved NtWriteFile")
-dd("fn_close", 0, "fn_close: resolved NtClose")
-dd("fn_exit", 0, "fn_exit: resolved NtTerminateProcess")
-dd("fn_rtlpath", 0, "fn_rtlpath: resolved RtlDosPathNameToNtPathName_U")
-dd("g_access", 0, "g_access: DesiredAccess held across the RtlDosPathNameToNtPathName_U call")
-dd("g_disp", 0, "g_disp: CreateDisposition, same")
-dd("g_handle", 0, "g_handle: NtCreateFile's out-parameter")
-dd("oa", 0, "oa: OBJECT_ATTRIBUTES.Length")
-dd("oa_root", 0, "oa_root: .RootDirectory")
-dd("oa_name", 0, "oa_name: .ObjectName")
-dd("oa_attr", 0, "oa_attr: .Attributes")
-dd("oa_sd", 0, "oa_sd: .SecurityDescriptor")
-dd("oa_sqos", 0, "oa_sqos: .SecurityQualityOfService")
-space("nt_path", 8, "nt_path: UNICODE_STRING filled by RtlDosPathNameToNtPathName_U")
-dd("iosb", 0, "iosb: IO_STATUS_BLOCK.Status")
-dd("iosb_info", 0, "iosb_info: IO_STATUS_BLOCK.Information")
-dd("in_handle", 0, "in_handle: argv[1]")
-dd("out_handle", 0, "out_handle: argv[2]")
-dd("arg_in", 0, "arg_in: PWSTR argv[1]")
-dd("arg_out", 0, "arg_out: PWSTR argv[2]")
 dd("malloc_ptr", 0, "malloc_ptr: the bump allocator's cursor")
 dd("head", 0, "head: the token list")
 dd("eof_flag", 0, "eof_flag: set once the input is exhausted")
 dd("tok_c", 0, "tok_c: the character Tokenize_Line is looking at")
 dd("tok_p", 0, "tok_p: the token being filled in")
-space("inbuf", 1, "inbuf: one-byte read buffer")
-space("outbuf", 1, "outbuf: one-byte write buffer")
 
 a.reserve("arena", 0, "everything malloc hands out, zero-filled by the loader")
 
 DOC = {
-"find_ntdll": """find_ntdll() -> ntdll base address.
-TEB (fs:0x30) -> PEB -> Ldr -> InMemoryOrderModuleList.  The first entry in that
-list is the main EXE and the second is ntdll.""",
-"resolve_export": """resolve_export(module_base, name) -> address, or 0 if not found.
-stdcall: arguments pushed right to left, callee cleans the stack.""",
-"next_token": """next_token() -> eax = the next argument, or 0 when exhausted.
-esi is the cursor into the command line.  Characters are UTF-16, so it advances
-two bytes at a time.""",
-"open_file": """open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition) -> handle.
-RtlDosPathNameToNtPathName_U converts the DOS path into the NT path
-NtCreateFile requires.""",
-"fgetc": """fgetc() -> eax = the next input byte, or -4 at end of file.
--4 rather than -1 because that is the value upstream's fgetc returns, and
-Store_Atom and Tokenize_Line compare against it.""",
-"fputc": "fputc(al = byte).  One write per byte, as upstream does it.",
+**SHARED_DOC,
+
 "malloc": """malloc(eax = size) -> eax = pointer.
 A bump allocator over the memory past the end of the file.  The loader zeroed
 it, so this is calloc as well, which is what every caller assumes.  Nothing is
@@ -719,15 +623,10 @@ itself.  That is what carries hex2's labels and pointers through untouched.""",
 "_start": """Resolve the six ntdll routines, open both files, read every token, then run the
 passes in order: reverse, find macros, apply them, convert strings, convert
 immediates, preserve the rest, print.""",
-"name_NtCreateFile": "Export names, matched by resolve_export.",
+"M0_data": "M0's own data; the plumbing's lives in ntdll-i386.hex2.",
 "terminators": "The character sets the tokenizer splits on.",
 "fn_create": "Resolved routine addresses.",
-"g_access": "Arguments that must survive the RtlDosPathNameToNtPathName_U call.",
-"oa": "OBJECT_ATTRIBUTES, one label per field so hex2 can address each of them.",
-"iosb": "IO_STATUS_BLOCK.",
-"in_handle": "The two open files and the argv pointers they came from.",
 "malloc_ptr": "Allocator and tokenizer state.",
-"inbuf": "One-byte read and write buffers.",
 }
 
 BANNER = "\n".join(spdx([UPSTREAM, PORT])) + """M0-pe32: the Windows (PE32/i386) port of stage0's M0 macro assembler.
@@ -754,8 +653,16 @@ Tokens become a linked list, and the work is a sequence of passes over it.
 Nothing is ever freed: malloc hands out the zero-filled memory past the end of
 the file, so the passes can be as careless with it as upstream's are.
 
-This file carries no PE header.  catm puts PE32-i386.hex2 in front of it, the
-same way upstream catms ELF-i386.hex2 in front of M0_x86.hex2."""
+This file carries neither a PE header nor the Windows plumbing every program
+here needs.  catm puts both in front of it:
 
-sys.exit(0 if emit_pe_hex2(a, BANNER, DOC, "name_NtCreateFile",
-                           sys.argv[1], sys.argv[2], "M0", inline_header=False) else 1)
+  catm M0.hex2 PE32-i386.hex2 ntdll-i386.hex2 M0_x86.hex2
+  hex2 M0.hex2 M0
+
+which is upstream's shape, with the PE32 header standing in for the ELF one and
+ntdll-i386.hex2 standing in for the syscalls upstream can simply make."""
+
+sys.exit(0 if emit_pe_hex2(a, BANNER, DOC, "M0_data",
+                           sys.argv[1], sys.argv[2], "M0", inline_header=False,
+                           drop_through=BOUNDARY,
+                           prefix_files=[sys.argv[3]]) else 1)

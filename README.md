@@ -20,6 +20,7 @@ reading, from the bottom up.
     x86/hex2_x86.hex1                         hex2, written in hex1
     x86/catm_x86.hex2                         catm, written in hex2
     x86/PE32-i386.hex2                        the PE32 header, in hex2
+    x86/ntdll-i386.hex2                       the shared Windows plumbing, in hex2
     x86/M0_x86.hex2                           M0, written in hex2
 
 | link | adds |
@@ -50,6 +51,12 @@ There are no syscalls. A PE32 image here imports nothing at all: it finds ntdll
 through the PEB at run time and resolves the handful of routines it needs from
 ntdll's export table by name. There is no import table to inspect and nothing
 between the file and the kernel.
+
+That plumbing is the same in every program, so from M0 upward it lives in
+`x86/ntdll-i386.hex2` and catm puts it in front of the program, the way it puts
+the header stub in front of both. hex0, hex1, hex2 and catm cannot use it --
+there is no catm below catm to join files with -- so they carry their own
+copies. Upstream has the same arrangement in `x86/libc-core.M1`.
 
 There is no `brk`. `x86/PE32-i386.hex2` gives every program a section whose
 VirtualSize runs to the top of a 16 MB image, so the memory past the end of the

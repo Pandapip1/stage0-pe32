@@ -26,8 +26,9 @@ rem Phase-2  hex2 adds long labels and sized pointers, and so is a linker
 rem Phase-2b catm removes the need for a shell to join files
 "%ART%\hex2.exe" "%HERE%catm_x86.hex2" "%ART%\catm.exe" || goto :fail
 
-rem Phase-3  M0, the macro assembler, is the first link built from two files
-"%ART%\catm.exe" "%ART%\M0.hex2" "%HERE%PE32-i386.hex2" "%HERE%M0_x86.hex2" || goto :fail
+rem Phase-3  M0, the macro assembler, is the first link built from several files:
+rem the header stub, the shared Windows plumbing, and the program itself.
+"%ART%\catm.exe" "%ART%\M0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%HERE%M0_x86.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M0.hex2" "%ART%\M0.exe" || goto :fail
 
 echo Built: hex0 hex1 hex2 catm M0

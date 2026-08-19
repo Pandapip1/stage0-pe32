@@ -15,13 +15,15 @@ from pe32hdr import (IMAGE_BASE, HDR_SIZE, TEXT_BASE, IMAGE_SIZE,
                      header_lines, header_bytes, assemble_hex2)
 
 
-def emit_pe_hex2(a, banner, DOC, data_label, out_exe, out_hex, name, inline_header=True):
+def emit_pe_hex2(a, banner, DOC, data_label, out_exe, out_hex, name,
+                 inline_header=True, code_marks=(), prefix_files=(),
+                 drop_through=None, entry="_start", verify=True, emit_tail=True):
     a.org = TEXT_BASE
     body, lines, labels = a.assemble()
     bss_total = sum(sz for _n, sz, _c in a.bss)
     assert TEXT_BASE + len(body) + bss_total <= IMAGE_BASE + IMAGE_SIZE, "image too small"
     pe_end = TEXT_BASE + len(body)
-    exe = header_bytes(pe_end, labels["_start"]) + body
+    exe = header_bytes(pe_end, labels[entry]) + body
 
     # A four-byte field that holds a label's address is written &label, and a
     # relative displacement %label; hex2 resolves both.
@@ -53,9 +55,11 @@ def emit_pe_hex2(a, banner, DOC, data_label, out_exe, out_hex, name, inline_head
         if kind == "label":
             flush(None)
             L.append("")
-            if x == data_label:
+            if x == data_label or x in getattr(emit_pe_hex2, "_extra_data", ()):
                 L += ["## ==== .data ====", ""]
                 in_data[0] = True
+            if x in code_marks:
+                in_data[0] = False
             if x in DOC:
                 L += block(DOC[x])
             L.append(":" + x)
@@ -73,23 +77,38 @@ def emit_pe_hex2(a, banner, DOC, data_label, out_exe, out_hex, name, inline_head
                 flush(comment)
     flush(None)
 
-    L += ["", "# SizeOfCode and SizeOfRawData are measured to here.", ":PE_end"]
-    if a.bss:
+    if emit_tail:
+        L += ["", "# SizeOfCode and SizeOfRawData are measured to here.", ":PE_end"]
+    if emit_tail and a.bss:
         L += ["", "## ==== reserved, zero-filled by the loader (past the end of the file) ===="]
         for nm, sz, note in a.bss:
             L.append(":%s%s" % (nm, ("  # %d bytes  -- %s" % (sz, note)) if note
                                     else "  # %d bytes" % sz))
 
+    if drop_through is not None:
+        # Everything up to this label is in a file of its own, catm'd in ahead
+        # of this one; keep it in the layout so labels resolve, drop it here.
+        cut = next(i for i, line in enumerate(L) if line == ":" + drop_through)
+        L = block(banner) + L[cut + 1:]
+
     open(out_exe, "wb").write(exe)
     open(out_hex, "w").write("\n".join(L) + "\n")
 
+    if not verify:
+        # Not a program on its own: it is checked where it is actually used.
+        print("%s: code+data %d (checked as part of the program that includes it)"
+              % (name, len(body)))
+        return True
+
     text = open(out_hex, "rb").read()
+    for extra in reversed(prefix_files):
+        text = open(extra, "rb").read() + text
     if not inline_header:
-        # what catm will hand hex2: the stub, then this file
+        # what catm will hand hex2: the stub, then everything catm'd after it
         text = ("\n".join(header_lines()) + "\n").encode() + text
     got = bytes(assemble_hex2(text))
     ok = got == exe
-    print("%s: code+data %d, file %d, entry 0x%x" % (name, len(body), len(exe), labels["_start"]))
+    print("%s: code+data %d, file %d, entry 0x%x" % (name, len(body), len(exe), labels[entry]))
     print("  round-trip:", "IDENTICAL" if ok else "MISMATCH")
     if not ok:
         for i in range(min(len(got), len(exe))):

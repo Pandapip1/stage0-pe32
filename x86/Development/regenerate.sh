@@ -12,6 +12,7 @@ python3 gen_hex1.py   /tmp/hex1.exe ../hex1_x86.hex0 hex0_32-original.exe
 python3 gen_hex2.py   /tmp/hex2.exe ../hex2_x86.hex1 hex0_32-original.exe
 python3 gen_header.py ../PE32-i386.hex2
 python3 gen_catm.py   /tmp/catm.exe ../catm_x86.hex2
-python3 gen_m0.py     /tmp/M0.exe   ../M0_x86.hex2
+python3 gen_ntdll.py  /tmp/ntdll.exe ../ntdll-i386.hex2
+python3 gen_m0.py     /tmp/M0.exe   ../M0_x86.hex2 ../ntdll-i386.hex2
 cmp /tmp/hex0.exe ../../bootstrap-seeds/PE32/i386/hex0-seed.exe \
   && echo "seed still reproduces"
