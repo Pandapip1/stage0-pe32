@@ -56,9 +56,12 @@ rem port of M2libc\x86\linux\bootstrap.c and is the only Windows-specific piece.
 rem Phase-6  M1-macro, a fuller assembler than M0: more label and pointer
 rem widths, more architectures in one binary.  Compiled by M2 like any other
 rem program; upstream also runs this stage's output through blood-elf first,
-rem to add an ELF symbol table purely so objdump and gdb can read it -- there
-rem is no PE equivalent worth building, and nothing here needs it, so that
-rem step is skipped and PE32-i386.hex2 stands in unchanged.
+rem which adds an ELF symbol table and section headers so objdump and gdb can
+rem read the result, and supplies the :ELF_end that --debug stops M2-Planet
+rem emitting.  Without --debug, M2-Planet emits it itself and blood-elf has
+rem nothing left to contribute but debugging information, so that step is
+rem skipped and PE32-i386.hex2 stands in unchanged.  See the README: GNU Mes
+rem builds and passes its own tests either way.
 rem
 rem M2's own C is unmodified, so it always ends its output with :ELF_end, the
 rem label its ELF header expects; PE32-i386.hex2 expects :PE_end.  pe-end-shim.M1

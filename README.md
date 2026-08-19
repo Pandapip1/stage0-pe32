@@ -226,12 +226,28 @@ it exited with, and ends by calling `execve` and not coming back.
 
 M1-macro is a fuller assembler than M0: more label and pointer widths, every
 architecture stage0 supports in one binary. Upstream also runs this stage's
-output through `blood-elf`, a tool whose entire job is emitting an ELF symbol
-table and section headers purely so `objdump` and `gdb` can read the result --
-nothing downstream depends on it functionally, confirmed by diffing upstream's
-"debug" and plain ELF headers, which differ only in that section-header table.
-There is no PE equivalent worth building for that, so this port skips
-`blood-elf` entirely; `PE32-i386.hex2` stands in unchanged.
+output through `blood-elf`, and this port does not, which is worth setting out
+properly because everything downstream of here -- GNU Mes included -- runs
+blood-elf too.
+
+Three things go together, and all three are debugging. `--debug` makes
+M2-Planet end its output with `:ELF_data` instead of `:ELF_end`. blood-elf
+then reads that output and writes an ELF string table, symbol table and
+section headers -- and the `:ELF_end` M2-Planet did not write. The "debug" ELF
+header declares five sections and refers to `:ELF_section_headers`, which is
+why it needs blood-elf's output to link at all. Drop `--debug`, drop blood-elf
+and use the plain ELF header, and M2-Planet emits `:ELF_end` itself; the plain
+header wants nothing from outside but that label and `:_start`. Which is
+exactly the shape `PE32-i386.hex2` has, with `:PE_end` for `:ELF_end`.
+
+So there is nothing to port, and the symbol table is what `objdump` and `gdb`
+read and nothing else does. Checked on GNU Mes rather than argued: built at
+`f244b14` twice with native tools, once as `kaem.run` ships and once with
+`--debug` and blood-elf removed and the plain ELF header in place. Both
+`bin/mes-m2` binaries run, agree character for character on a program
+exercising recursion, `map`, `assq`, strings and `write`, and pass the same ten
+of Mes's own tests. The blood-elf one is 232686 bytes and the other 131262:
+the whole difference is the debugging information.
 
 ## Licence
 
