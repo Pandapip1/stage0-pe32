@@ -35,12 +35,17 @@
  *
  *   pid = __spawn(f, argv, envp); waitpid(pid, &s, 0);
  *
- * Two limits worth knowing.  Windows hands a child one string rather than a
- * vector, so argv is joined with spaces and the child splits it again -- and
- * the splitting in x86/libc-core.M1 knows nothing about quotes, so an argument
- * with a space in it arrives as two.  And the child inherits this process's
- * three standard handles, which is what makes redirection work at all, but
- * only those three.
+ * Windows hands a child one string rather than a vector, so argv is joined
+ * into one here and split again at the other end.  Both halves follow the rule
+ * CommandLineToArgvW defines, which is the one every Windows program is parsed
+ * by: an argument with a space or a quote in it is wrapped in quotes, a quote
+ * inside it becomes \", and a backslash run before either becomes twice as
+ * long so that the split can tell the two apart.  So an argument survives the
+ * round trip whatever is in it -- see next_token in x86/ntdll-i386.hex2 for
+ * the other side of the same rule.
+ *
+ * The child inherits this process's three standard handles, which is what
+ * makes redirection work at all, but only those three.
  *
  * The calling rules for everything below are in M2libc-windows/ntdll.c: the
  * arguments go in backwards, and none of them may write EDX.
@@ -49,7 +54,99 @@
 #ifndef __PROCESS_C
 #define __PROCESS_C
 
-/* argv as the single command line Windows gives a child. */
+/* The closing quote of a quoted argument.  A function of its own because
+ * __quote_arg reaches the end from two places. */
+int __quote_close(char* dst, int at)
+{
+	dst[at] = '"';
+	return at + 1;
+}
+
+/* One argument, written into dst at `at` the way CommandLineToArgvW will read
+ * it back, and where the next one would go.
+ *
+ * An argument with nothing awkward in it is written as it stands.  One with a
+ * space, a tab or a quote is wrapped in quotes, and then two things have to be
+ * escaped inside: a quote becomes \", and any run of backslashes that is
+ * about to be followed by a quote -- the one being escaped, or the one that
+ * closes the argument -- is doubled, so that the reader can tell a backslash
+ * that is text from one that is protecting the quote after it.  A run of
+ * backslashes anywhere else is left alone.
+ *
+ * `C:\dir\` is the case that makes this necessary rather than pedantic:
+ * written naively it would end ...dir\", and the reader would take that
+ * backslash to be protecting the closing quote and swallow the rest of the
+ * command line. */
+int __quote_arg(char* dst, int at, char* arg)
+{
+	int i;
+	int n;
+	int plain;
+
+	plain = 1;
+	if(0 == arg[0]) plain = 0;
+	i = 0;
+	while(0 != arg[i])
+	{
+		if((' ' == arg[i]) || ('\t' == arg[i]) || ('"' == arg[i])) plain = 0;
+		i = i + 1;
+	}
+
+	if(plain)
+	{
+		i = 0;
+		while(0 != arg[i])
+		{
+			dst[at] = arg[i];
+			at = at + 1;
+			i = i + 1;
+		}
+		return at;
+	}
+
+	dst[at] = '"';
+	at = at + 1;
+	i = 0;
+	while(0 != arg[i])
+	{
+		n = 0;
+		while('\\' == arg[i])
+		{
+			n = n + 1;
+			i = i + 1;
+		}
+
+		if(0 == arg[i])
+		{
+			/* The run runs into the closing quote, so it doubles. */
+			n = 2 * n;
+		}
+		else if('"' == arg[i])
+		{
+			/* The run protects nothing, but the quote after it needs
+			 * protecting, which is the odd one on the end. */
+			n = 2 * n + 1;
+		}
+
+		while(0 < n)
+		{
+			dst[at] = '\\';
+			at = at + 1;
+			n = n - 1;
+		}
+
+		if(0 == arg[i]) return __quote_close(dst, at);
+
+		dst[at] = arg[i];
+		at = at + 1;
+		i = i + 1;
+	}
+	return __quote_close(dst, at);
+}
+
+/* argv as the single command line Windows gives a child.  Room for twice each
+ * argument plus its quotes, which is the worst an argument of nothing but
+ * backslashes and quotes could come to. */
 char* __cmdline(char** argv)
 {
 	int n;
@@ -64,7 +161,7 @@ char* __cmdline(char** argv)
 	{
 		j = 0;
 		while(0 != argv[i][j]) j = j + 1;
-		n = n + j + 1;
+		n = n + 2 * j + 3;
 		i = i + 1;
 	}
 
@@ -78,13 +175,7 @@ char* __cmdline(char** argv)
 			out[at] = ' ';
 			at = at + 1;
 		}
-		j = 0;
-		while(0 != argv[i][j])
-		{
-			out[at] = argv[i][j];
-			at = at + 1;
-			j = j + 1;
-		}
+		at = __quote_arg(out, at, argv[i]);
 		i = i + 1;
 	}
 	out[at] = 0;

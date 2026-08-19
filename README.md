@@ -221,9 +221,12 @@ the change `kaem` and M2-Mesoplanet would want, and it is two lines.
 
 The child inherits this process's three standard handles, which is what makes
 redirection possible. Windows hands a child one string rather than a vector,
-so argv is joined with spaces and the child splits it again -- and the
-splitting in `libc-core.M1` knows nothing about quotes, so an argument with a
-space in it arrives as two.
+so `__spawn` joins argv into one and the child splits it again; both halves
+follow `CommandLineToArgvW`, so an argument survives whatever is in it.
+`C:\dir\` is the case that makes the rule worth following exactly rather than
+approximately: quoted naively it ends `...dir\"`, and the reader takes that
+backslash to be protecting the closing quote and swallows the rest of the
+command line.
 
 `x86/Development/spawn-test.c` starts a program, waits for it, reads back what
 it exited with, and ends by calling `execve` and not coming back.

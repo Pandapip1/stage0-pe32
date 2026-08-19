@@ -17,15 +17,32 @@
  * What this shows, in order: fork fails and says so; a spawned child gets this
  * process's standard handles, so anything it prints lands here; waitpid brings
  * back what it exited with; a program that is not there fails rather than
- * hanging; and execve does not return.
+ * hanging; arguments survive being joined into one command line and split
+ * again, which it checks by spawning itself; and execve does not return.
  */
 
 int main(int argc, char** argv)
 {
 	char** a;
+	char** AWKWARD;
 	int* status;
 	int pid;
 	int i;
+
+	/* Spawned by the run below, to say what actually arrived. */
+	if((argc > 1) && match("--echo-args", argv[1]))
+	{
+		i = 2;
+		while(i < argc)
+		{
+			fputs("    <", stdout);
+			fputs(argv[i], stdout);
+			fputs(">\n", stdout);
+			i = i + 1;
+		}
+		fflush(stdout);
+		return 0;
+	}
 
 	fputs("fork() = ", stdout);
 	fputs(int2str(fork(), 10, TRUE), stdout);
@@ -67,6 +84,56 @@ int main(int argc, char** argv)
 	fputs("a program that is not there: ", stdout);
 	fputs(int2str(__spawn("no-such-program.exe", a, NULL), 10, TRUE), stdout);
 	fputs("   (expected -1)\n", stdout);
+
+	/* The arguments spawning has to survive: a space, quotes, and the
+	 * trailing backslash that a naive quoter turns into an escape for the
+	 * closing quote, losing the rest of the command line with it. */
+	AWKWARD = calloc(6, 4);
+	AWKWARD[0] = "a b";
+	AWKWARD[1] = "has \"quotes\" in it";
+	AWKWARD[2] = "C:\\dir\\";
+	AWKWARD[3] = "back\\\\slash";
+	AWKWARD[4] = "lone\\slash";
+	AWKWARD[5] = "plain";
+
+	fputs("spawning myself; these should come back exactly as written:\n", stdout);
+	i = 0;
+	while(i < 6)
+	{
+		fputs("    <", stdout);
+		fputs(AWKWARD[i], stdout);
+		fputs(">\n", stdout);
+		i = i + 1;
+	}
+	fputs("and what arrived was:\n", stdout);
+	fflush(stdout);
+
+	a = calloc(9, 4);
+	a[0] = argv[0];
+	a[1] = "--echo-args";
+	i = 0;
+	while(i < 6)
+	{
+		a[i + 2] = AWKWARD[i];
+		i = i + 1;
+	}
+	a[8] = NULL;
+	pid = __spawn(a[0], a, NULL);
+	if(0 >= pid)
+	{
+		fputs("could not spawn myself\n", stdout);
+		return 1;
+	}
+	waitpid(pid, status, 0);
+
+	/* argv[1] onwards again, for the execve below. */
+	a = calloc(argc, 4);
+	i = 1;
+	while(i < argc)
+	{
+		a[i - 1] = argv[i];
+		i = i + 1;
+	}
 
 	fputs("execve now; nothing after this line should print, and this\n", stdout);
 	fputs("process should exit with what the child exits with\n", stdout);
