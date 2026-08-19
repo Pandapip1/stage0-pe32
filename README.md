@@ -35,6 +35,12 @@ reading, from the bottom up.
 
 ## Building
 
+Clone with submodules -- from cc_x86 up, the build compiles C, and M2-Planet
+and M2libc's bootstrap C library are vendored as submodules rather than by
+hand, since they are upstream's exactly as upstream wrote them:
+
+    git clone --recurse-submodules <this repo>
+
 On Windows:
 
     x86\mescc-tools-mini.cmd
@@ -102,6 +108,15 @@ and the name of the label that ends the image. Feed the same C to upstream's
 `:ELF_end` that becomes `:PE_end`. The binaries share nothing -- different
 format, different entry, different plumbing -- but the compiler between them is
 demonstrably the same compiler.
+
+From cc_x86 up, the chain compiles C rather than hand-written assembly, and the
+C it compiles first is M2-Planet's own: `M2-Planet/` and `M2libc/` are git
+submodules, pinned to the exact commits stage0-posix itself vendors them at,
+because nothing in them is Windows-specific and there is nothing to port.
+`x86/libc-core.M1` and `x86/M2libc-windows/bootstrap.c` are what M2-Planet
+compiles against instead of `M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit
+plumbing a C program needs, standing on `x86/ntdll-i386.hex2` the same way
+`x86/cc_x86.M1` does. See their own headers for what each routine does.
 
 ## Licence
 

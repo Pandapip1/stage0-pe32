@@ -1,0 +1,294 @@
+# SPDX-FileCopyrightText: (C) 2016-2021 Jeremiah Orians
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional permission under GNU GPL version 3 section 7:
+# see LICENSE.EXCEPTION in the root of this project.
+#
+# libc-core-pe32: what a C program compiled by cc_x86 stands on.
+#
+# cc_x86 emits calls and arithmetic and nothing else.  Everything a program
+# does that is not arithmetic has to be here, or in the bootstrap.c that goes
+# with this file.  catm puts the three in front of the compiled program:
+#
+#   catm prog-0.M1 x86_defs.M1 libc-core.M1 prog.M1
+#   M0 prog-0.M1 prog-0.hex2
+#   catm prog.hex2 PE32-i386.hex2 ntdll-i386.hex2 prog-0.hex2
+#   hex2 prog.hex2 prog.exe
+#
+# so ntdll-i386.hex2 is linked in as well and this file may call into it.  What
+# it adds on top is the part that is specific to C rather than to Windows:
+#
+#   _start            build argc and argv, call main, exit with what it returns
+#   __stdhandle       0, 1 and 2 mean stdin, stdout and stderr
+#   __read_byte       one byte from a FILE*, or -1
+#   __write_byte      one byte to a FILE*
+#   __open, __close   a file by name
+#   __exit            stop, with a status
+#   __heap_start      where malloc may begin
+#
+# x86/M2libc-windows/bootstrap.c is the other half: it is the C these are
+# reached from, and the two are meant to be read together.
+#
+# Upstream's x86/libc-core.M1 is nine instructions, because on Linux argc and
+# argv are already on the stack and exit is a syscall.  Neither is true here.
+#
+# The memory past the end of the image
+#
+# There is no brk and nothing is ever asked of the operating system: the image
+# runs to 128MB and everything past the end of the file is mapped, writable and
+# already zero.  This file divides it up, measured from :PE_end, which is the
+# last label the compiled program emits:
+#
+#   +0x00000   argv, 256 pointers
+#   +0x00400   the argument strings themselves
+#   +0x08000   one path, widened to UTF-16 for ntdll
+#   +0x10000   the heap, which is where malloc starts
+#
+# Nothing checks these bounds.  A command line of more than 256 arguments or
+# 31KB, or a path of more than 2048 characters, would run past its own area,
+# and this is the layer below the one that could report it.
+
+
+# Instructions x86_defs.M1 does not already name.  A duplicate DEFINE is
+# harmless -- x86_defs.M1 has one of its own -- but there is no reason to add
+# any, so these are only the ones it lacks.
+DEFINE add_ebx, 81C3
+DEFINE add_ecx, 81C1
+DEFINE add_edi, 81C7
+DEFINE add_edx, 81C2
+DEFINE call_[DWORD] FF15
+DEFINE cmp_eax, 83F8
+DEFINE jg 0F8F
+DEFINE js 0F88
+DEFINE mov_al,[edx] 8A02
+DEFINE mov_ebp, BD
+DEFINE mov_ebx,ebp 89EB
+DEFINE mov_ecx, B9
+DEFINE mov_edi, BF
+DEFINE mov_edx,eax 89C2
+DEFINE mov_esi, BE
+DEFINE mov_eax,[eax+BYTE] 8B40
+DEFINE mov_eax,[fs:DWORD] 64A1
+DEFINE mov_esi,[eax+BYTE] 8B70
+DEFINE mov_[DWORD],eax A3
+DEFINE mov_[DWORD],ebx 891D
+DEFINE mov_[ebx],edi 893B
+DEFINE mov_[edi],al 8807
+DEFINE mov_[edi],BYTE C607
+DEFINE movzx_eax,BYTE_PTR_[DWORD] 0FB605
+DEFINE push_byte 6A
+DEFINE push_ecx 51
+DEFINE push_edi 57
+DEFINE push_DWORD 68
+DEFINE push_[DWORD] FF35
+DEFINE sal_ebx, C1E3
+DEFINE test_al,al 84C0
+DEFINE test_ebx,ebx 85DB
+
+
+# _start
+# Where the PE header sends us
+# Builds the argc and argv that main expects, calls it, and exits with what it
+# returns
+#
+# cc_x86 gives a function its arguments below the frame pointer: the first at
+# ebp-4, the second at ebp-8, and so on, with the return address below those
+# and main's own locals below that.  So the three words pushed here, in this
+# order, are what main reads as argc, argv and envp.  The environment is a
+# pointer to a NULL, because nothing in this chain reads one.
+:_start
+	call %resolve_all                           ; Find ntdll and resolve what we need from it
+
+	mov_ebp, &PE_end                            ; ARGV, the array of pointers
+	mov_ebx,ebp                                 ; Cursor into that array
+	mov_edi, &PE_end
+	add_edi, %1024                              ; STRINGS, after 256 pointer slots
+	mov_ecx, %0                                 ; ARGC = 0
+
+	mov_eax,[fs:DWORD] %0x30                    ; TEB->PEB
+	mov_eax,[eax+BYTE] !16                      ; PEB->ProcessParameters
+	mov_esi,[eax+BYTE] !68                      ; ->CommandLine.Buffer, the cursor next_token walks
+
+:_start_arg
+	call %next_token                            ; The next argument, in UTF-16, or NULL
+	test_eax,eax                                ; Check for the end of the command line
+	je %_start_args_done                        ; Then we have them all
+
+	mov_[ebx],edi                               ; argv[argc] = where its narrow copy will go
+	add_ebx, %4                                 ; Advance the array cursor
+	add_ecx, %1                                 ; ARGC = ARGC + 1
+	mov_edx,eax                                 ; The UTF-16 source
+
+:_start_narrow
+	mov_al,[edx]                                ; Low byte of the UTF-16 unit
+	mov_[edi],al                                ; Which for ASCII is the whole character
+	add_edi, %1
+	add_edx, %2                                 ; UTF-16 advances two bytes at a time
+	test_al,al                                  ; Check for the NUL
+	jne %_start_narrow                          ; Which is copied and then ends the loop
+	jmp %_start_arg                             ; On to the next argument
+
+:_start_args_done
+	mov_eax, %0
+	mov_[ebx],eax                               ; argv[argc] = NULL, which main tests for
+
+	push_ecx                                    ; argc, which main reads at ebp-4
+	push_ebp                                    ; argv, at ebp-8
+	push_ebx                                    ; envp, at ebp-12: the NULL just written
+	mov_ebp,esp
+	add_ebp, %12                                ; ebp is 4 above the argc that was pushed first
+	call %FUNCTION_main
+
+	push_eax                                    ; ExitStatus = whatever main returned
+	push_byte !-1                               ; ProcessHandle = NtCurrentProcess pseudo-handle
+	call_[DWORD] &fn_exit                       ; Does not return
+
+
+# __stdhandle function
+# Receives FILE* in EAX
+# Returns a handle Windows will accept in EAX
+#
+# C says stdin, stdout and stderr are 0, 1 and 2.  Windows has no such numbers;
+# the three handles are in the PEB, next to each other, starting at
+# ProcessParameters+0x18.  Anything above 2 is already a handle -- a real one
+# is never that small -- and comes back unchanged.
+:__stdhandle
+	cmp_eax, !2                                 ; Check for one of the three
+	jg %__stdhandle_done                        ; Otherwise it is already a handle
+	push_ebx                                    ; Protect EBX
+	mov_ebx,eax                                 ; 0, 1 or 2
+	sal_ebx, !2                                 ; Which is a word apart in the PEB
+	add_ebx, %24                                ; ProcessParameters->hStdInput is at 0x18
+	mov_eax,[fs:DWORD] %0x30                    ; TEB->PEB
+	mov_eax,[eax+BYTE] !16                      ; PEB->ProcessParameters
+	add_eax,ebx                                 ; The slot we want
+	mov_eax,[eax]                               ; The handle in it
+	pop_ebx                                     ; Restore EBX
+
+:__stdhandle_done
+	ret
+
+
+# __read_byte function
+# Receives FILE* in EAX
+# Returns the byte in EAX, or -1 at end of file
+#
+# -1 rather than the -4 ntdll-i386.hex2's own fgetc returns, because this is
+# the EOF the C in bootstrap.c compares against.
+:__read_byte
+	call %__stdhandle                           ; What ntdll will accept
+	mov_[DWORD],eax &__handle                   ; Held while the arguments are pushed
+	push_byte !0                                ; Key
+	push_byte !0                                ; ByteOffset = NULL: the file keeps its own position
+	push_byte !1                                ; Length = 1
+	push_DWORD &inbuf                           ; Buffer
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_byte !0                                ; ApcContext
+	push_byte !0                                ; ApcRoutine
+	push_byte !0                                ; Event
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_read
+	test_eax,eax                                ; NTSTATUS < 0, which is how end of file arrives
+	js %__read_byte_eof
+	movzx_eax,BYTE_PTR_[DWORD] &inbuf           ; The byte, zero extended
+	ret
+
+:__read_byte_eof
+	mov_eax, %-1                                ; EOF, as bootstrap.c spells it
+	ret
+
+
+# __write_byte function
+# Receives FILE* in EAX and the byte in EBX
+# Returns nothing
+:__write_byte
+	mov_[DWORD],ebx &__byte                     ; The byte gets a word of its own to be written from
+	call %__stdhandle                           ; What ntdll will accept
+	mov_[DWORD],eax &__handle                   ; Held while the arguments are pushed
+	push_byte !0                                ; Key
+	push_byte !0                                ; ByteOffset = NULL
+	push_byte !1                                ; Length = 1
+	push_DWORD &__byte                          ; Buffer
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_byte !0                                ; ApcContext
+	push_byte !0                                ; ApcRoutine
+	push_byte !0                                ; Event
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_write
+	ret
+
+
+# __open function
+# Receives char* name in EAX and, in EBX, nonzero to write and zero to read
+# Returns a handle in EAX, or 0
+#
+# ntdll takes UTF-16 and nothing else, so the name is widened first.  ASCII
+# widens by putting a zero after every byte; anything else in a path will not
+# survive, and this is not the layer that could tell you so.
+:__open
+	mov_edx,eax                                 ; The narrow source
+	mov_edi, &PE_end
+	add_edi, %0x8000                            ; The path buffer, past the arguments
+	push_edi                                    ; Where it starts, for after the loop
+
+:__open_widen
+	mov_al,[edx]
+	mov_[edi],al                                ; The character
+	add_edi, %1
+	mov_[edi],BYTE !0                           ; And the zero above it
+	add_edi, %1
+	add_edx, %1
+	test_al,al                                  ; Check for the NUL
+	jne %__open_widen                           ; Which is widened and then ends the loop
+
+	pop_eax                                     ; The widened path
+	test_ebx,ebx                                ; Reading or writing
+	jne %__open_write
+
+	mov_ecx, %0x80100000                        ; GENERIC_READ|SYNCHRONIZE
+	mov_edx, %1                                 ; FILE_OPEN: it has to be there already
+	jmp %open_file                              ; Which returns the handle, or 0
+
+:__open_write
+	mov_ecx, %0x40100000                        ; GENERIC_WRITE|SYNCHRONIZE
+	mov_edx, %5                                 ; FILE_OVERWRITE_IF: made or emptied
+	jmp %open_file                              ; Which returns the handle, or 0
+
+
+# __close function
+# Receives FILE* in EAX
+# Returns nothing useful
+:__close
+	call %__stdhandle                           ; What ntdll will accept
+	push_eax                                    ; Handle
+	call_[DWORD] &fn_close
+	ret
+
+
+# __exit function
+# Receives the status in EAX
+# Does NOT return
+:__exit
+	push_eax                                    ; ExitStatus
+	push_byte !-1                               ; ProcessHandle = NtCurrentProcess pseudo-handle
+	call_[DWORD] &fn_exit
+
+
+# __heap_start function
+# Receives nothing
+# Returns the first address malloc may hand out
+:__heap_start
+	mov_eax, &PE_end
+	add_eax, %0x10000                           ; Past the arguments and the path buffer
+	ret
+
+
+# Two words of scratch.  Nothing falls into them: every routine above ends in a
+# ret or in a call that does not return, and the compiled program is only ever
+# entered through a label.
+:__handle
+	NULL
+
+:__byte
+	NULL
