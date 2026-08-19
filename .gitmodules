@@ -4,3 +4,6 @@
 [submodule "M2libc"]
 	path = M2libc
 	url = https://github.com/oriansj/M2libc.git
+[submodule "mescc-tools"]
+	path = mescc-tools
+	url = https://git.savannah.nongnu.org/git/mescc-tools.git
