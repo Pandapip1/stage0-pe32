@@ -337,6 +337,18 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_version              ; mov [fn_version], eax
+	68 &name_RtlCreateProcessParameters ; push name_RtlCreateProcessParameters
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_makeparams           ; mov [fn_makeparams], eax
+	68 &name_RtlCreateUserProcess ; push name_RtlCreateUserProcess
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_createproc           ; mov [fn_createproc], eax
+	68 &name_NtResumeThread     ; push name_NtResumeThread
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_resume               ; mov [fn_resume], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -428,6 +440,15 @@
 :name_RtlGetVersion
 52 74 6C 47 65 74 56 65 72 73 69 6F 6E 00 # name_RtlGetVersion = "RtlGetVersion"
 
+:name_RtlCreateProcessParameters
+52 74 6C 43 72 65 61 74 65 50 72 6F 63 65 73 73 50 61 72 61 6D 65 74 65 72 73 00 # name_RtlCreateProcessParameters = "RtlCreateProcessParameters"
+
+:name_RtlCreateUserProcess
+52 74 6C 43 72 65 61 74 65 55 73 65 72 50 72 6F 63 65 73 73 00 # name_RtlCreateUserProcess = "RtlCreateUserProcess"
+
+:name_NtResumeThread
+4E 74 52 65 73 75 6D 65 54 68 72 65 61 64 00 # name_NtResumeThread = "NtResumeThread"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
@@ -487,6 +508,15 @@
 
 :fn_version
 00 00 00 00                     # fn_version: slot 18, resolved RtlGetVersion -- uname
+
+:fn_makeparams
+00 00 00 00                     # fn_makeparams: slot 19, resolved RtlCreateProcessParameters -- __spawn, for the child's parameter block
+
+:fn_createproc
+00 00 00 00                     # fn_createproc: slot 20, resolved RtlCreateUserProcess -- __spawn
+
+:fn_resume
+00 00 00 00                     # fn_resume: slot 21, resolved NtResumeThread -- __spawn: a new process starts suspended
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access

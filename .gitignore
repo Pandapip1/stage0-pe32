@@ -1,2 +1,7 @@
 x86/artifact/
 __pycache__/
+
+# What building Development/*-test.c leaves beside it
+x86/Development/*-test*.M1
+x86/Development/*-test*.hex2
+x86/Development/*-test*.exe

@@ -32,7 +32,7 @@ python3 check_mnemonics.py ../libc-bootstrap.M1 ../../M2libc/x86/x86_defs.M1
 # the outer call jumping to whatever is there instead, with nothing to say
 # where it came from.  Nothing diagnoses that either, so check it here.
 python3 check_fnptr_args.py ../M2libc-windows/ntdll.c ../M2libc-windows/unistd.c \
-                            ../M2libc-windows/fcntl.c ../M2libc-windows/sys/stat.c
+                            ../M2libc-windows/process.c ../M2libc-windows/fcntl.c ../M2libc-windows/sys/stat.c
 
 # cc_x86.M1 is readable assembly rather than hex, so it is not written from
 # scratch here: port_cc_x86.py patches upstream's copy.  Point CC_X86_UPSTREAM

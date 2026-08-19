@@ -50,6 +50,9 @@ NTDLL = [
     ("fn_queryproc",  "NtQueryInformationProcess",    "waitpid, for the exit status"),
     ("fn_delete",     "NtDeleteFile",                 "unlink and rmdir"),
     ("fn_version",    "RtlGetVersion",                "uname"),
+    ("fn_makeparams", "RtlCreateProcessParameters",   "__spawn, for the child's parameter block"),
+    ("fn_createproc", "RtlCreateUserProcess",         "__spawn"),
+    ("fn_resume",     "NtResumeThread",               "__spawn: a new process starts suspended"),
 ]
 
 def emit_shared(a):

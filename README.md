@@ -195,9 +195,34 @@ jumps to zero with nothing to say where it came from. That cost three
 debugging rounds in one sitting, so `x86/Development/check_fnptr_args.py`
 fails on one now, and is checked against all three.
 
-`fork`, `execve` and `waitpid` are still missing. They are what `kaem`,
-M2-Mesoplanet and GNU Mes all want, and Windows has no `fork` at all, so they
-are a port rather than a translation.
+`x86/M2libc-windows/process.c` is starting another program and waiting for it,
+and it is the one place this port cannot keep the POSIX shape. fork's whole
+meaning is that the child comes back from the same call with the same memory,
+and Windows has no call that does that -- ntdll's `RtlCloneUserProcess` is the
+nearest thing, clones an address space the Win32 side knows nothing about, and
+cannot be tested here at all, since wine does not export it. So `fork` fails
+and says why, and the three steps of fork-exec-wait are taken apart into ones
+Windows can do:
+
+    __spawn(path, argv, envp)   start a program; a handle to it comes back
+    waitpid(pid, &status, 0)    wait for one of those to finish
+    execve(path, argv, envp)    both of the above, and then exit as it did
+
+A pid is the process handle, the way a file descriptor is a file handle.
+`execve` does not replace the running image, because nothing on Windows can,
+but it does not return either and the process's exit status is the child's.
+A caller that today says `fork()` then `execve` in the child and `waitpid` in
+the parent says `__spawn` then `waitpid` instead, and needs no fork; that is
+the change `kaem` and M2-Mesoplanet would want, and it is two lines.
+
+The child inherits this process's three standard handles, which is what makes
+redirection possible. Windows hands a child one string rather than a vector,
+so argv is joined with spaces and the child splits it again -- and the
+splitting in `libc-core.M1` knows nothing about quotes, so an argument with a
+space in it arrives as two.
+
+`x86/Development/spawn-test.c` starts a program, waits for it, reads back what
+it exited with, and ends by calling `execve` and not coming back.
 
 M1-macro is a fuller assembler than M0: more label and pointer widths, every
 architecture stage0 supports in one binary. Upstream also runs this stage's
