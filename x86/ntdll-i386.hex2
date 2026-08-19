@@ -120,37 +120,89 @@
 :.tok_start
 	66 83 3E 00                 ; cmp word [esi], 0
 	0F 84 %.none                ; je .none                    # end of command line
-	66 83 3E 22                 ; cmp word [esi], '"'
-	0F 84 %.quoted              ; je .quoted
-	89 F0                       ; mov eax, esi                # token starts here
+	53                          ; push ebx                    # the caller's, and needed here
+	51                          ; push ecx
+	89 F2                       ; mov edx, esi                # the write cursor starts where the token does
+	52                          ; push edx                    # and that is what gets returned
+	31 C9                       ; xor ecx, ecx                # not inside quotes yet
 
 :.scan
-	66 83 3E 00                 ; cmp word [esi], 0
-	0F 84 %.done                ; je .done                    # last token, already NUL-terminated
-	66 83 3E 20                 ; cmp word [esi], ' '
+	66 8B 06                    ; mov ax, [esi]
+	66 85 C0                    ; test ax, ax
+	0F 84 %.done                ; je .done                    # the end of the command line ends the token
+	85 C9                       ; test ecx, ecx
+	0F 85 %.quoting             ; jne .quoting                # inside quotes, whitespace is text
+	66 83 F8 20                 ; cmp ax, ' '
 	0F 84 %.cut                 ; je .cut
-	66 83 3E 09                 ; cmp word [esi], TAB
+	66 83 F8 09                 ; cmp ax, TAB
 	0F 84 %.cut                 ; je .cut
+
+:.quoting
+	66 83 F8 5C                 ; cmp ax, '\'
+	0F 84 %.backslash           ; je .backslash
+	66 83 F8 22                 ; cmp ax, '"'
+	0F 84 %.quote               ; je .quote
+	66 89 02                    ; mov [edx], ax               # an ordinary character, kept
+	83 C2 02                    ; add edx, 2
 	83 C6 02                    ; add esi, 2
 	E9 %.scan                   ; jmp .scan
 
-:.quoted
-	83 C6 02                    ; add esi, 2                  # skip the opening quote
-	89 F0                       ; mov eax, esi
-
-:.qscan
-	66 83 3E 00                 ; cmp word [esi], 0
-	0F 84 %.done                ; je .done
-	66 83 3E 22                 ; cmp word [esi], '"'
-	0F 84 %.cut                 ; je .cut
+:.quote
+	83 F1 01                    ; xor ecx, 1                  # a quote with no backslashes before it only opens or closes
 	83 C6 02                    ; add esi, 2
-	E9 %.qscan                  ; jmp .qscan
+	E9 %.scan                   ; jmp .scan
+
+:.backslash
+	31 DB                       ; xor ebx, ebx                # count the whole run before deciding what it means
+
+:.bs_count
+	66 83 3E 5C                 ; cmp word [esi], '\'
+	0F 85 %.bs_end              ; jne .bs_end
+	43                          ; inc ebx
+	83 C6 02                    ; add esi, 2
+	E9 %.bs_count               ; jmp .bs_count
+
+:.bs_end
+	66 83 3E 22                 ; cmp word [esi], '"'
+	0F 84 %.bs_quote            ; je .bs_quote
+
+:.bs_plain
+	85 DB                       ; test ebx, ebx               # not before a quote: every one of them is itself
+	0F 84 %.scan                ; je .scan
+	66 C7 02 5C 00              ; mov word [edx], '\'
+	83 C2 02                    ; add edx, 2
+	4B                          ; dec ebx
+	E9 %.bs_plain               ; jmp .bs_plain
+
+:.bs_quote
+	89 D8                       ; mov eax, ebx                # before a quote: half of them survive
+	83 E0 01                    ; and eax, 1                  # and an odd one makes the quote a literal
+	D1 EB                       ; shr ebx, 1
+
+:.bsq_emit
+	85 DB                       ; test ebx, ebx
+	0F 84 %.bsq_end             ; je .bsq_end
+	66 C7 02 5C 00              ; mov word [edx], '\'
+	83 C2 02                    ; add edx, 2
+	4B                          ; dec ebx
+	E9 %.bsq_emit               ; jmp .bsq_emit
+
+:.bsq_end
+	85 C0                       ; test eax, eax
+	0F 84 %.scan                ; je .scan                    # an even run leaves the quote to open or close
+	66 C7 02 22 00              ; mov word [edx], '"'         # an odd one leaves a quote in the text
+	83 C2 02                    ; add edx, 2
+	83 C6 02                    ; add esi, 2                  # and consumes it
+	E9 %.scan                   ; jmp .scan
 
 :.cut
-	66 C7 06 00 00              ; mov word [esi], 0           # NUL-terminate in place (ProcessParameters is writable)
-	83 C6 02                    ; add esi, 2
+	83 C6 02                    ; add esi, 2                  # step past the separator, for the next call
 
 :.done
+	66 C7 02 00 00              ; mov word [edx], 0           # terminate what was written, which is at or before what was read
+	58                          ; pop eax                     # the token
+	59                          ; pop ecx
+	5B                          ; pop ebx
 	C3                          ; ret
 
 :.none

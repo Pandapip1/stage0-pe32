@@ -68,7 +68,11 @@ between the file and the kernel.
 
 That plumbing is the same in every program, so from M0 upward it lives in
 `x86/ntdll-i386.hex2` and catm puts it in front of the program, the way it puts
-the header stub in front of both. hex0, hex1, hex2 and catm cannot use it --
+the header stub in front of both. Part of it is splitting the command line,
+because Windows hands a program one string rather than a vector: from M0 up
+that split is the whole rule `CommandLineToArgvW` defines, backslash escaping
+and all, since anything that launches another program writes an embedded quote
+as `\"` and an argument cut off at the first one is worse than useless. hex0, hex1, hex2 and catm cannot use it --
 there is no catm below catm to join files with -- so they carry their own
 copies. Upstream has the same arrangement in `x86/libc-core.M1`.
 

@@ -527,7 +527,7 @@ def emit_find_ntdll(a):
 def emit_resolve_export(a):
     a.label("resolve_export"); _emit_asm(a, RESOLVE_ASM, RESOLVE)
 
-def emit_next_token(a, tabs=False):
+def emit_next_token(a, tabs=False, escapes=False):
     """Split the command line into arguments; see the DOC entry.
 
     tabs=True also treats a tab as a separator, alongside space.  It matters
@@ -538,9 +538,26 @@ def emit_next_token(a, tabs=False):
     before it already was.  hex0 and hex1 are always invoked on one line, so
     they keep the plain, space-only version: hex0's own copy has to stay
     exactly what it always was, byte for byte, for the seed to keep
-    reproducing itself.  Anything invoked across continuation lines --
-    catm, and everything from M0 up through ntdll-i386.hex2 -- takes tabs=True.
+    reproducing itself.
+
+    escapes=True is the full rule CommandLineToArgvW defines rather than only
+    "..." grouping: a run of n backslashes before a quote is n/2 backslashes,
+    and the quote is a literal one if n was odd and a delimiter if it was
+    even; backslashes not before a quote are themselves.  Without it an
+    argument with a quote inside it arrives cut off at the first one, which is
+    what every argument becomes when one program launches another -- wine and
+    the Windows runtimes alike escape an embedded quote that way.  It costs
+    an argument being rewritten shorter than it was found, so this version
+    compacts as it goes, with a write cursor trailing the read cursor; the
+    plain version only had to write one NUL.
+
+    Both are off by default so hex0's bytes are whatever they always were.
+    Only the shared plumbing in ntdll-i386.hex2, which is what anything above
+    catm parses its arguments with, asks for either.
     """
+    def I(hx, mn, prose=None):
+        a.raw(bytes.fromhex(hx.replace(" ", "")), a._c(mn, prose))
+
     a.label("next_token")
     a.label(".skip")
     a.raw(b"\x66\x83\x3e\x20", "cmp word [esi], ' '")
@@ -556,39 +573,126 @@ def emit_next_token(a, tabs=False):
     a.label(".tok_start")
     a.raw(b"\x66\x83\x3e\x00", "cmp word [esi], 0")
     a.jcc("e", ".none", "je .none  -- end of command line")
-    a.raw(b"\x66\x83\x3e\x22", 'cmp word [esi], \'"\'')
-    a.jcc("e", ".quoted", "je .quoted")
-    a.raw(b"\x89\xf0", "mov eax, esi  -- token starts here")
+
+    if not escapes:
+        a.raw(b"\x66\x83\x3e\x22", 'cmp word [esi], \'"\'')
+        a.jcc("e", ".quoted", "je .quoted")
+        a.raw(b"\x89\xf0", "mov eax, esi  -- token starts here")
+        a.label(".scan")
+        a.raw(b"\x66\x83\x3e\x00", "cmp word [esi], 0")
+        a.jcc("e", ".done", "je .done  -- last token, already NUL-terminated")
+        a.raw(b"\x66\x83\x3e\x20", "cmp word [esi], ' '")
+        a.jcc("e", ".cut", "je .cut")
+        if tabs:
+            a.raw(b"\x66\x83\x3e\x09", "cmp word [esi], TAB")
+            a.jcc("e", ".cut", "je .cut")
+        a.raw(b"\x83\xc6\x02", "add esi, 2")
+        a.jmp(".scan", "jmp .scan")
+        a.label(".quoted")
+        a.raw(b"\x83\xc6\x02", "add esi, 2  -- skip the opening quote")
+        a.raw(b"\x89\xf0", "mov eax, esi")
+        a.label(".qscan")
+        a.raw(b"\x66\x83\x3e\x00", "cmp word [esi], 0")
+        a.jcc("e", ".done", "je .done")
+        a.raw(b"\x66\x83\x3e\x22", 'cmp word [esi], \'"\'')
+        a.jcc("e", ".cut", "je .cut")
+        a.raw(b"\x83\xc6\x02", "add esi, 2")
+        a.jmp(".qscan", "jmp .qscan")
+        a.label(".cut")
+        a.raw(b"\x66\xc7\x06\x00\x00", "mov word [esi], 0  -- NUL-terminate in place (ProcessParameters is writable)")
+        a.raw(b"\x83\xc6\x02", "add esi, 2")
+        a.label(".done")
+        a.ret("ret")
+        a.label(".none")
+        a.raw(b"\x31\xc0", "xor eax, eax  -- no token")
+        a.ret("ret")
+        return
+
+    # ESI reads, EDX writes behind it, and EDX never passes ESI: a quote or a
+    # backslash is dropped, and nothing is ever added, so the argument only
+    # ever gets shorter.  EBX counts a run of backslashes and ECX says whether
+    # we are inside quotes; both belong to the caller and are put back.
+    a.push_r("ebx", "the caller's, and needed here")
+    a.push_r("ecx")
+    I("89 F2", "mov edx, esi", "the write cursor starts where the token does")
+    a.push_r("edx", "and that is what gets returned")
+    I("31 C9", "xor ecx, ecx", "not inside quotes yet")
+
     a.label(".scan")
-    a.raw(b"\x66\x83\x3e\x00", "cmp word [esi], 0")
-    a.jcc("e", ".done", "je .done  -- last token, already NUL-terminated")
-    a.raw(b"\x66\x83\x3e\x20", "cmp word [esi], ' '")
+    I("66 8B 06", "mov ax, [esi]")
+    I("66 85 C0", "test ax, ax")
+    a.jcc("e", ".done", "je .done  -- the end of the command line ends the token")
+    I("85 C9", "test ecx, ecx")
+    a.jcc("ne", ".quoting", "jne .quoting  -- inside quotes, whitespace is text")
+    I("66 83 F8 20", "cmp ax, ' '")
     a.jcc("e", ".cut", "je .cut")
     if tabs:
-        a.raw(b"\x66\x83\x3e\x09", "cmp word [esi], TAB")
+        I("66 83 F8 09", "cmp ax, TAB")
         a.jcc("e", ".cut", "je .cut")
-    a.raw(b"\x83\xc6\x02", "add esi, 2")
+    a.label(".quoting")
+    I("66 83 F8 5C", "cmp ax, '\\'")
+    a.jcc("e", ".backslash", "je .backslash")
+    I("66 83 F8 22", 'cmp ax, \'"\'')
+    a.jcc("e", ".quote", "je .quote")
+    I("66 89 02", "mov [edx], ax", "an ordinary character, kept")
+    I("83 C2 02", "add edx, 2")
+    I("83 C6 02", "add esi, 2")
     a.jmp(".scan", "jmp .scan")
-    a.label(".quoted")
-    a.raw(b"\x83\xc6\x02", "add esi, 2  -- skip the opening quote")
-    a.raw(b"\x89\xf0", "mov eax, esi")
-    a.label(".qscan")
-    a.raw(b"\x66\x83\x3e\x00", "cmp word [esi], 0")
-    a.jcc("e", ".done", "je .done")
-    a.raw(b"\x66\x83\x3e\x22", 'cmp word [esi], \'"\'')
-    a.jcc("e", ".cut", "je .cut")
-    a.raw(b"\x83\xc6\x02", "add esi, 2")
-    a.jmp(".qscan", "jmp .qscan")
+
+    a.label(".quote")
+    I("83 F1 01", "xor ecx, 1", "a quote with no backslashes before it only opens or closes")
+    I("83 C6 02", "add esi, 2")
+    a.jmp(".scan", "jmp .scan")
+
+    a.label(".backslash")
+    I("31 DB", "xor ebx, ebx", "count the whole run before deciding what it means")
+    a.label(".bs_count")
+    I("66 83 3E 5C", "cmp word [esi], '\\'")
+    a.jcc("ne", ".bs_end", "jne .bs_end")
+    I("43", "inc ebx")
+    I("83 C6 02", "add esi, 2")
+    a.jmp(".bs_count", "jmp .bs_count")
+    a.label(".bs_end")
+    I("66 83 3E 22", 'cmp word [esi], \'"\'')
+    a.jcc("e", ".bs_quote", "je .bs_quote")
+    a.label(".bs_plain")
+    I("85 DB", "test ebx, ebx", "not before a quote: every one of them is itself")
+    a.jcc("e", ".scan", "je .scan")
+    I("66 C7 02 5C 00", "mov word [edx], '\\'")
+    I("83 C2 02", "add edx, 2")
+    I("4B", "dec ebx")
+    a.jmp(".bs_plain", "jmp .bs_plain")
+
+    a.label(".bs_quote")
+    I("89 D8", "mov eax, ebx", "before a quote: half of them survive")
+    I("83 E0 01", "and eax, 1", "and an odd one makes the quote a literal")
+    I("D1 EB", "shr ebx, 1")
+    a.label(".bsq_emit")
+    I("85 DB", "test ebx, ebx")
+    a.jcc("e", ".bsq_end", "je .bsq_end")
+    I("66 C7 02 5C 00", "mov word [edx], '\\'")
+    I("83 C2 02", "add edx, 2")
+    I("4B", "dec ebx")
+    a.jmp(".bsq_emit", "jmp .bsq_emit")
+    a.label(".bsq_end")
+    I("85 C0", "test eax, eax")
+    a.jcc("e", ".scan", "je .scan  -- an even run leaves the quote to open or close")
+    I("66 C7 02 22 00", 'mov word [edx], \'"\'', "an odd one leaves a quote in the text")
+    I("83 C2 02", "add edx, 2")
+    I("83 C6 02", "add esi, 2", "and consumes it")
+    a.jmp(".scan", "jmp .scan")
+
     a.label(".cut")
-    a.raw(b"\x66\xc7\x06\x00\x00", "mov word [esi], 0  -- NUL-terminate in place (ProcessParameters is writable)")
-    a.raw(b"\x83\xc6\x02", "add esi, 2")
+    I("83 C6 02", "add esi, 2", "step past the separator, for the next call")
     a.label(".done")
+    I("66 C7 02 00 00", "mov word [edx], 0", "terminate what was written, which is at or before what was read")
+    a.pop_r("eax", "the token")
+    a.pop_r("ecx")
+    a.pop_r("ebx")
     a.ret("ret")
     a.label(".none")
-    a.raw(b"\x31\xc0", "xor eax, eax  -- no token")
+    I("31 C0", "xor eax, eax", "no token")
     a.ret("ret")
-
-    # ---- open_file: eax = PWSTR path, ecx = DesiredAccess, edx = CreateDisposition ----
 
 def emit_open_file(a, check_status=False):
     """Open one file by DOS path; see the DOC entry.

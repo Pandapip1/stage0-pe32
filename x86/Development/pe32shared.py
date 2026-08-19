@@ -60,7 +60,7 @@ def emit_shared(a):
     """Code first, then the data it uses, then the boundary label."""
     emit_find_ntdll(a)
     emit_resolve_export(a)
-    emit_next_token(a, tabs=True)
+    emit_next_token(a, tabs=True, escapes=True)
     emit_open_file(a, check_status=True)
 
     def I(hx, mn, prose=None):
