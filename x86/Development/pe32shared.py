@@ -79,7 +79,9 @@ def emit_shared(a):
     I("89 C3", "mov ebx, eax", "ntdll base, held across every resolve_export call")
     for slot, nm in [("fn_create", "name_NtCreateFile"), ("fn_read", "name_NtReadFile"),
                      ("fn_write", "name_NtWriteFile"), ("fn_close", "name_NtClose"),
-                     ("fn_exit", "name_NtTerminateProcess"), ("fn_rtlpath", "name_RtlDosPath")]:
+                     ("fn_exit", "name_NtTerminateProcess"), ("fn_rtlpath", "name_RtlDosPath"),
+                     ("fn_setinfo", "name_NtSetInformationFile"),
+                     ("fn_queryinfo", "name_NtQueryInformationFile")]:
         a.push_lbl(nm)
         a.push_r("ebx", "module_base")
         a.call("resolve_export", "call resolve_export")
@@ -128,12 +130,16 @@ def emit_shared(a):
     asciiz("name_NtClose", "NtClose")
     asciiz("name_NtTerminateProcess", "NtTerminateProcess")
     asciiz("name_RtlDosPath", "RtlDosPathNameToNtPathName_U")
+    asciiz("name_NtSetInformationFile", "NtSetInformationFile")
+    asciiz("name_NtQueryInformationFile", "NtQueryInformationFile")
     dd("fn_create", 0, "fn_create: resolved NtCreateFile")
     dd("fn_read", 0, "fn_read: resolved NtReadFile")
     dd("fn_write", 0, "fn_write: resolved NtWriteFile")
     dd("fn_close", 0, "fn_close: resolved NtClose")
     dd("fn_exit", 0, "fn_exit: resolved NtTerminateProcess")
     dd("fn_rtlpath", 0, "fn_rtlpath: resolved RtlDosPathNameToNtPathName_U")
+    dd("fn_setinfo", 0, "fn_setinfo: resolved NtSetInformationFile, for lseek")
+    dd("fn_queryinfo", 0, "fn_queryinfo: resolved NtQueryInformationFile, for lseek")
     dd("g_access", 0, "g_access: DesiredAccess held across the RtlDosPathNameToNtPathName_U call")
     dd("g_disp", 0, "g_disp: CreateDisposition, same")
     dd("g_handle", 0, "g_handle: NtCreateFile's out-parameter")
@@ -180,13 +186,13 @@ what upstream's callers assume of it.""",
 "fputc": """fputc(al = byte): one write per byte, as upstream does it.  Every
 register comes back untouched, eax included, so a caller may write the same byte
 twice without reloading it.""",
-"resolve_all": """resolve_all(): fill in the six fn_ slots.  Call this before anything else;
-nothing below works until it has run.""",
+"resolve_all": """resolve_all(): fill in the eight fn_ slots.  Call this before anything
+else; nothing below works until it has run.""",
 "open_argv": """open_argv(): argv[1] opened for reading, argv[2] created or truncated for
 writing.  Every program in this chain takes exactly those two arguments.""",
 "exit_ok": "exit_ok(): close both files and exit 0.  Does not return.",
 "name_NtCreateFile": "Export names, matched by resolve_export.",
-"fn_create": "Resolved routine addresses.  Kept in memory because six will not fit in registers.",
+"fn_create": "Resolved routine addresses.  Kept in memory because eight will not fit in registers.",
 "g_access": "Arguments that must survive the RtlDosPathNameToNtPathName_U call.",
 "oa": "OBJECT_ATTRIBUTES, one label per field so hex2 can address each of them.",
 "iosb": "IO_STATUS_BLOCK.  Information is the byte count of a read.",

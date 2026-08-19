@@ -23,7 +23,7 @@ and catm puts it in front of the program:
 hex0, hex1, hex2 and catm cannot use it -- there is no catm below catm to join
 files with -- so they carry their own copies.
 
-  resolve_all()   fill in the six fn_ slots; call it first
+  resolve_all()   fill in the eight fn_ slots; call it first
   open_argv()     argv[1] for reading, argv[2] for writing
   fgetc()         the next input byte, or -4 at end of file
   fputc(al)       one byte to the output

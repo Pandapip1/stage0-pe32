@@ -17,6 +17,20 @@
 #   catm prog.hex2 PE32-i386.hex2 ntdll-i386.hex2 prog-0.hex2
 #   hex2 prog.hex2 prog.exe
 #
+# ntdll-i386.hex2 is linked in as well, so this file may call into it.  What it
+# adds on top is the part that is specific to C rather than to Windows:
+#
+#   _start            build argc and argv, call main, exit with what it returns
+#   __stdhandle       0, 1 and 2 mean stdin, stdout and stderr
+#   __read_byte       one byte from a FILE*, or -1
+#   __write_byte      one byte to a FILE*
+#   __read_block      a buffer's worth, for a C library that buffers
+#   __write_block     the same, outbound
+#   __lseek           move the file position, or ask where it is
+#   __open, __close   a file by name
+#   __exit            stop, with a status
+#   __heap_start      where malloc may begin
+#
 # M2libc/x86/x86_defs.M1 -- the submodule's own, not a copy -- matters more
 # than it looks: it is the mnemonic set M2's own code generator actually emits
 # (xor_eax,eax and friends), which is wider than what cc_x86.M1's hand-written
@@ -24,17 +38,6 @@
 # passes the text through unchanged, which hex2 then can't make sense of
 # either, and the mnemonic is silently dropped instead of assembled.  Getting
 # this file wrong doesn't fail loudly; it corrupts the binary quietly.
-#
-# so ntdll-i386.hex2 is linked in as well and this file may call into it.  What
-# it adds on top is the part that is specific to C rather than to Windows:
-#
-#   _start            build argc and argv, call main, exit with what it returns
-#   __stdhandle       0, 1 and 2 mean stdin, stdout and stderr
-#   __read_byte       one byte from a FILE*, or -1
-#   __write_byte      one byte to a FILE*
-#   __open, __close   a file by name
-#   __exit            stop, with a status
-#   __heap_start      where malloc may begin
 #
 # x86/M2libc-windows/bootstrap.c is the other half: it is the C these are
 # reached from, and the two are meant to be read together.
@@ -82,6 +85,9 @@ DEFINE mov_eax,[fs:DWORD] 64A1
 DEFINE mov_esi,[eax+BYTE] 8B70
 DEFINE mov_[DWORD],eax A3
 DEFINE mov_[DWORD],ebx 891D
+DEFINE mov_[DWORD],ecx 890D
+DEFINE mov_eax,[DWORD] A1
+DEFINE mov_ebx,[DWORD] 8B1D
 DEFINE mov_[ebx],edi 893B
 DEFINE mov_[edi],al 8807
 DEFINE mov_[edi],BYTE C607
@@ -293,6 +299,128 @@ DEFINE test_ebx,ebx 85DB
 	ret
 
 
+# __read_block function
+# Receives FILE* in EAX, buffer in EBX, count in ECX
+# Returns the number of bytes actually read in EAX, or 0 at end of file
+#
+# __read_byte's larger sibling.  M2libc's stdio.c buffers, so it asks for a
+# block at a time rather than a byte; the count actually transferred comes back
+# in the IO_STATUS_BLOCK's Information field, which is why iosb_info is read
+# rather than trusting the count that was asked for.
+:__read_block
+	mov_[DWORD],ebx &__bufptr                   ; Held while the arguments are pushed
+	mov_[DWORD],ecx &__buflen
+	call %__stdhandle                           ; What ntdll will accept
+	mov_[DWORD],eax &__handle
+	push_byte !0                                ; Key
+	push_byte !0                                ; ByteOffset = NULL: the file keeps its own position
+	push_[DWORD] &__buflen                      ; Length
+	push_[DWORD] &__bufptr                      ; Buffer
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_byte !0                                ; ApcContext
+	push_byte !0                                ; ApcRoutine
+	push_byte !0                                ; Event
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_read
+	test_eax,eax                                ; NTSTATUS < 0, end of file among them
+	js %__read_block_eof
+	mov_eax,[DWORD] &iosb_info                  ; However much actually arrived
+	ret
+
+:__read_block_eof
+	mov_eax, %0                                 ; Nothing read, which is how a caller sees the end
+	ret
+
+
+# __write_block function
+# Receives FILE* in EAX, buffer in EBX, count in ECX
+# Returns the number of bytes written in EAX
+:__write_block
+	mov_[DWORD],ebx &__bufptr                   ; Held while the arguments are pushed
+	mov_[DWORD],ecx &__buflen
+	call %__stdhandle                           ; What ntdll will accept
+	mov_[DWORD],eax &__handle
+	push_byte !0                                ; Key
+	push_byte !0                                ; ByteOffset = NULL
+	push_[DWORD] &__buflen                      ; Length
+	push_[DWORD] &__bufptr                      ; Buffer
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_byte !0                                ; ApcContext
+	push_byte !0                                ; ApcRoutine
+	push_byte !0                                ; Event
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_write
+	test_eax,eax                                ; NTSTATUS < 0 is a failure to write
+	js %__write_block_fail
+	mov_eax,[DWORD] &iosb_info                  ; However much actually went out
+	ret
+
+:__write_block_fail
+	mov_eax, %-1
+	ret
+
+
+# __lseek function
+# Receives FILE* in EAX, offset in EBX, whence in ECX (0 SET, 1 CUR, 2 END)
+# Returns the new position in EAX
+#
+# The file position lives in the I/O manager, because every file here is opened
+# FILE_SYNCHRONOUS_IO_NONALERT, so moving it means asking ntdll rather than
+# tracking it here.  FILE_POSITION_INFORMATION is class 14 and one LARGE_INTEGER;
+# FILE_STANDARD_INFORMATION is class 5, with EndOfFile eight bytes into it.
+# Only the low half of either is used: a file this chain can process is not 4GB.
+:__lseek
+	mov_[DWORD],ebx &__bufptr                   ; The offset, held across the calls below
+	mov_[DWORD],ecx &__buflen                   ; And whence
+	call %__stdhandle                           ; What ntdll will accept
+	mov_[DWORD],eax &__handle
+
+	mov_eax,[DWORD] &__buflen
+	cmp_eax, !0
+	je %__lseek_from_set                        ; SEEK_SET: the offset is the position
+	cmp_eax, !2
+	je %__lseek_from_end                        ; SEEK_END: read the size first
+
+	; SEEK_CUR: read the position we are at, then add to it
+	push_byte !14                               ; FileInformationClass = FilePositionInformation
+	push_byte !8                                ; Length
+	push_DWORD &__filepos                       ; FileInformation
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_queryinfo
+	mov_eax,[DWORD] &__filepos
+	add_eax,ebx                                 ; Where we were, plus the offset
+	jmp %__lseek_set
+
+:__lseek_from_set
+	mov_eax,[DWORD] &__bufptr                   ; The offset, measured from the start
+	jmp %__lseek_set
+
+:__lseek_from_end
+	push_byte !5                                ; FileInformationClass = FileStandardInformation
+	push_byte !24                               ; Length
+	push_DWORD &__stdinfo                       ; FileInformation
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_queryinfo
+	mov_eax,[DWORD] &__stdinfo_eof              ; EndOfFile, eight bytes in
+	mov_ebx,[DWORD] &__bufptr
+	add_eax,ebx                                 ; The size, plus the offset
+
+:__lseek_set
+	mov_[DWORD],eax &__filepos                  ; The position we want
+	mov_ebx, %0
+	mov_[DWORD],ebx &__filepos_hi               ; Nothing here is past 4GB
+	push_byte !14                               ; FileInformationClass = FilePositionInformation
+	push_byte !8                                ; Length
+	push_DWORD &__filepos                       ; FileInformation
+	push_DWORD &iosb                            ; IoStatusBlock
+	push_[DWORD] &__handle                      ; FileHandle
+	call_[DWORD] &fn_setinfo
+	mov_eax,[DWORD] &__filepos                  ; Which is where we now are
+	ret
+
+
 # Two words of scratch.  Nothing falls into them: every routine above ends in a
 # ret or in a call that does not return, and the compiled program is only ever
 # entered through a label.
@@ -300,4 +428,36 @@ DEFINE test_ebx,ebx 85DB
 	NULL
 
 :__byte
+	NULL
+
+:__bufptr
+	NULL
+
+:__buflen
+	NULL
+
+# FILE_POSITION_INFORMATION is one LARGE_INTEGER, and the class number for both
+# NtSetInformationFile and NtQueryInformationFile is 14.
+:__filepos
+	NULL
+
+:__filepos_hi
+	NULL
+
+# FILE_STANDARD_INFORMATION, class 5: AllocationSize, EndOfFile, NumberOfLinks,
+# DeletePending, Directory.  Only EndOfFile is read, so the rest is just room.
+:__stdinfo
+	NULL
+
+:__stdinfo_hi
+	NULL
+
+:__stdinfo_eof
+	NULL
+
+:__stdinfo_eof_hi
+	NULL
+
+:__stdinfo_rest
+	NULL
 	NULL

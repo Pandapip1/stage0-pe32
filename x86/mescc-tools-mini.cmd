@@ -74,7 +74,37 @@ rem defines :PE_end at that same address without touching the vendored source.
 "%ART%\catm.exe" "%ART%\M1-macro-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\M1-macro.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M1-macro-0.hex2" "%ART%\M1.exe" || goto :fail
 
-echo Built: hex0 hex1 hex2 catm M0 cc_x86 M2 M1
+rem Phase-7  hex2 from C.  The hand-written hex2 built everything up to here;
+rem this one replaces it, and unlike that one it is not limited to a fixed
+rem label table.  It needs the real preprocessor -- hex2.h says
+rem "#define max_string 4096" where M1-macro.c used an enum -- so this stage
+rem drops --bootstrap-mode, which in turn means the full M2libc rather than
+rem M2libc-windows\bootstrap.c: stdio.c's FILE and its buffering, standing on
+rem the POSIX layer in M2libc-windows\{unistd,fcntl,sys\stat}.c.
+"%ART%\M2.exe" --architecture x86 ^
+	-f "%HERE%..\M2libc\sys\types.h" ^
+	-f "%HERE%..\M2libc\stddef.h" ^
+	-f "%HERE%M2libc-windows\unistd.c" ^
+	-f "%HERE%M2libc-windows\fcntl.c" ^
+	-f "%HERE%..\M2libc\fcntl.c" ^
+	-f "%HERE%M2libc-windows\sys\stat.c" ^
+	-f "%HERE%..\M2libc\ctype.c" ^
+	-f "%HERE%..\M2libc\stdlib.c" ^
+	-f "%HERE%..\M2libc\stdarg.h" ^
+	-f "%HERE%..\M2libc\stdio.h" ^
+	-f "%HERE%..\M2libc\stdio.c" ^
+	-f "%HERE%..\M2libc\bootstrappable.c" ^
+	-f "%HERE%..\mescc-tools\hex2.h" ^
+	-f "%HERE%..\mescc-tools\hex2_linker.c" ^
+	-f "%HERE%..\mescc-tools\hex2_word.c" ^
+	-f "%HERE%..\mescc-tools\hex2.c" ^
+	-o "%ART%\hex2_linker.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\hex2_linker-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\hex2_linker.M1" "%HERE%pe-end-shim.M1" || goto :fail
+"%ART%\M0.exe" "%ART%\hex2_linker-0.M1" "%ART%\hex2_linker.hex2" || goto :fail
+"%ART%\catm.exe" "%ART%\hex2_linker-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\hex2_linker.hex2" || goto :fail
+"%ART%\hex2.exe" "%ART%\hex2_linker-0.hex2" "%ART%\hex2-new.exe" || goto :fail
+
+echo Built: hex0 hex1 hex2 catm M0 cc_x86 M2 M1 hex2-new
 exit /b 0
 
 :fail
