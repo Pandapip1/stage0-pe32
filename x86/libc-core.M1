@@ -30,6 +30,22 @@
 #   __open, __close   a file by name
 #   __exit            stop, with a status
 #   __heap_start      where malloc may begin
+#   __ntdll           an ntdll routine, by slot, for the C above to call
+#
+# What it does not have is the one thing that differs between the two C
+# libraries built on it.  M2libc's own stdio.c keeps stdin, stdout and stderr
+# in globals that a function has to fill in, and bootstrap.c has no such
+# notion; so _start calls :__libc_init, and which file catm puts next to this
+# one decides what that is:
+#
+#   libc-bootstrap.M1  nothing to do, for the --bootstrap-mode stages
+#   libc-full.M1       __init_malloc and __init_io, for the rest
+#
+# Leaving it out is not a link error -- M0 would resolve nothing and hex2 would
+# fail -- but leaving out the *full* one and using the bootstrap one by mistake
+# is quiet: stdout and stderr stay NULL, and the program faults the first time
+# it reports an error.  That is exactly what hex2 built from C did before this
+# existed.
 #
 # M2libc/x86/x86_defs.M1 -- the submodule's own, not a copy -- matters more
 # than it looks: it is the mnemonic set M2's own code generator actually emits
@@ -114,6 +130,7 @@ DEFINE test_ebx,ebx 85DB
 # pointer to a NULL, because nothing in this chain reads one.
 :_start
 	call %resolve_all                           ; Find ntdll and resolve what we need from it
+	call %__libc_init                           ; Whatever the C library above wants set up
 
 	mov_ebp, &PE_end                            ; ARGV, the array of pointers
 	mov_ebx,ebp                                 ; Cursor into that array
@@ -288,6 +305,30 @@ DEFINE test_ebx,ebx 85DB
 	push_eax                                    ; ExitStatus
 	push_byte !-1                               ; ProcessHandle = NtCurrentProcess pseudo-handle
 	call_[DWORD] &fn_exit
+
+
+# __ntdll function
+# Receives a slot number in EAX
+# Returns the address resolve_all put in that slot
+#
+# ntdll-i386.hex2 resolves each routine it needs out of ntdll's export table
+# into a slot, and fn_table names the first of them.  The C above this file
+# calls through the address this returns rather than through a stub written
+# here for each routine, which is what the rest of the POSIX layer would
+# otherwise have to be.
+#
+# That works because of how M2-Planet compiles a call: it saves the stack
+# pointer in EBP first and restores it from there afterwards, rather than
+# adding back what it pushed.  ntdll is stdcall and pops its own arguments, so
+# a caller that adds back would corrupt the stack and this one cannot.  The
+# arguments come out reversed -- M2-Planet pushes the first one first, and a
+# stdcall callee expects the first one on top -- so the C writes them backwards
+# and says so at each call.
+:__ntdll
+	sal_eax, !2                                 ; Four bytes to a slot
+	add_eax, &fn_table                          ; The first of them
+	mov_eax,[eax]                               ; The address in it
+	ret
 
 
 # __heap_start function

@@ -189,7 +189,7 @@
 	68 &oa                      ; push oa                     # ObjectAttributes
 	FF 35 &g_access             ; push dword [g_access]       # DesiredAccess
 	68 &g_handle                ; push g_handle               # FileHandle (out)
-	FF 15 &fn_create            ; call [fn_create]
+	FF 15 &fn_table             ; call [fn_create]
 	85 C0                       ; test eax, eax               # NTSTATUS < 0 is a failure to open
 	0F 88 %open_file.fail       ; js open_file.fail
 	A1 &g_handle                ; mov eax, [g_handle]
@@ -264,7 +264,7 @@
 	68 &name_NtCreateFile       ; push name_NtCreateFile
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
-	A3 &fn_create               ; mov [fn_create], eax
+	A3 &fn_table                ; mov [fn_create], eax
 	68 &name_NtReadFile         ; push name_NtReadFile
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
@@ -350,6 +350,8 @@
 
 :name_NtQueryInformationFile
 4E 74 51 75 65 72 79 49 6E 66 6F 72 6D 61 74 69 6F 6E 46 69 6C 65 00 # name_NtQueryInformationFile = "NtQueryInformationFile"
+
+:fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
 :fn_create

@@ -94,13 +94,19 @@ void* __heap_start()
 
 /* exit is what C calls; _exit is what the layer below calls.  M2libc declares
  * both and defines neither -- on Linux they come from libc-full.M1's _start,
- * which aliases them onto the same syscall.  Here they are the same call into
- * libc-core.M1, and neither returns. */
+ * which aliases them onto the same syscall.
+ *
+ * They are not aliases here, because M2libc's stdout is buffered 512 bytes at
+ * a time and exiting without flushing it throws away whatever has not reached
+ * the handle yet.  __kill_io is stdio.c's own flush-everything, the same one
+ * upstream's libc-full.M1 calls on the way out; it is declared here because
+ * this file is compiled before the stdio.c that defines it. */
+void __kill_io();
+
 void exit(int value)
 {
-	asm("lea_eax,[esp+DWORD] %4"
-	    "mov_eax,[eax]"
-	    "call %__exit");
+	__kill_io();
+	_exit(value);
 }
 
 /* Backs remove().  Nothing this bootstrap builds deletes a file -- hex2 only

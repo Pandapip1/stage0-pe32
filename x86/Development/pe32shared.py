@@ -132,6 +132,10 @@ def emit_shared(a):
     asciiz("name_RtlDosPath", "RtlDosPathNameToNtPathName_U")
     asciiz("name_NtSetInformationFile", "NtSetInformationFile")
     asciiz("name_NtQueryInformationFile", "NtQueryInformationFile")
+    # The fn_ slots are one contiguous array of resolved addresses, and
+    # fn_table names its start: libc-core.M1's __ntdll indexes it, so C above
+    # can reach an ntdll routine without a hand-written stub for each one.
+    a.label("fn_table")
     dd("fn_create", 0, "fn_create: resolved NtCreateFile")
     dd("fn_read", 0, "fn_read: resolved NtReadFile")
     dd("fn_write", 0, "fn_write: resolved NtWriteFile")

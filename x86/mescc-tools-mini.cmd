@@ -48,7 +48,7 @@ rem port of M2libc\x86\linux\bootstrap.c and is the only Windows-specific piece.
 	"%HERE%..\M2-Planet\cc_types.c" "%HERE%..\M2-Planet\cc_emit.c" "%HERE%..\M2-Planet\cc_core.c" ^
 	"%HERE%..\M2-Planet\cc_macro.c" "%HERE%..\M2-Planet\cc.c" || goto :fail
 "%ART%\cc_x86.exe" "%ART%\M2-0.c" "%ART%\M2-0.M1" || goto :fail
-"%ART%\catm.exe" "%ART%\M2-0-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\M2-0.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\M2-0-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%HERE%libc-bootstrap.M1" "%ART%\M2-0.M1" || goto :fail
 "%ART%\M0.exe" "%ART%\M2-0-0.M1" "%ART%\M2-0.hex2" || goto :fail
 "%ART%\catm.exe" "%ART%\M2-0-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\M2-0.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M2-0-0.hex2" "%ART%\M2.exe" || goto :fail
@@ -69,7 +69,7 @@ rem defines :PE_end at that same address without touching the vendored source.
 	-f "%HERE%..\mescc-tools\stringify.c" ^
 	-f "%HERE%..\mescc-tools\M1-macro.c" ^
 	-o "%ART%\M1-macro.M1" || goto :fail
-"%ART%\catm.exe" "%ART%\M1-macro-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\M1-macro.M1" "%HERE%pe-end-shim.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\M1-macro-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%HERE%libc-bootstrap.M1" "%ART%\M1-macro.M1" "%HERE%pe-end-shim.M1" || goto :fail
 "%ART%\M0.exe" "%ART%\M1-macro-0.M1" "%ART%\M1-macro.hex2" || goto :fail
 "%ART%\catm.exe" "%ART%\M1-macro-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\M1-macro.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M1-macro-0.hex2" "%ART%\M1.exe" || goto :fail
@@ -99,7 +99,7 @@ rem the POSIX layer in M2libc-windows\{unistd,fcntl,sys\stat}.c.
 	-f "%HERE%..\mescc-tools\hex2_word.c" ^
 	-f "%HERE%..\mescc-tools\hex2.c" ^
 	-o "%ART%\hex2_linker.M1" || goto :fail
-"%ART%\catm.exe" "%ART%\hex2_linker-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%ART%\hex2_linker.M1" "%HERE%pe-end-shim.M1" || goto :fail
+"%ART%\catm.exe" "%ART%\hex2_linker-0.M1" "%HERE%..\M2libc\x86\x86_defs.M1" "%HERE%libc-core.M1" "%HERE%libc-full.M1" "%ART%\hex2_linker.M1" "%HERE%pe-end-shim.M1" || goto :fail
 "%ART%\M0.exe" "%ART%\hex2_linker-0.M1" "%ART%\hex2_linker.hex2" || goto :fail
 "%ART%\catm.exe" "%ART%\hex2_linker-0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\hex2_linker.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\hex2_linker-0.hex2" "%ART%\hex2-new.exe" || goto :fail

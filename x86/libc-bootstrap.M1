@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional permission under GNU GPL version 3 section 7:
+# see LICENSE.EXCEPTION in the root of this project.
+#
+# libc-bootstrap.M1: the :__libc_init that libc-core.M1's _start calls, for a
+# program built against x86/M2libc-windows/bootstrap.c.
+#
+# There is nothing to do.  bootstrap.c has no FILE* and no free list -- its
+# malloc hands out the image's own memory and never takes any back, and its
+# fgetc and fputc take a handle rather than a stream -- so nothing has to be
+# built before main runs.  libc-full.M1 is the other half of this choice.
+:__libc_init
+	ret

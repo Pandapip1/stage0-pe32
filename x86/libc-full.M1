@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: (C) 2016-2021 Jeremiah Orians
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional permission under GNU GPL version 3 section 7:
+# see LICENSE.EXCEPTION in the root of this project.
+#
+# libc-full.M1: the :__libc_init that libc-core.M1's _start calls, for a
+# program built against the whole of M2libc rather than bootstrap.c.
+#
+# The same two calls M2libc/x86/libc-full.M1 makes upstream, and for the same
+# reasons.  __init_malloc empties the free lists, which in an image whose
+# memory starts out zero is already true, and is called anyway because being
+# the thing upstream calls is worth more than saving a call.  __init_io is not
+# optional: stdin, stdout and stderr are globals that start NULL, and every one
+# of M2libc's stdio routines dereferences the stream it is given.  A program
+# linked without this looks fine until the first time it tries to report an
+# error, and then faults inside fputs instead of printing it.
+:__libc_init
+	call %FUNCTION___init_malloc                ; Empty the free lists
+	call %FUNCTION___init_io                    ; stdin, stdout and stderr
+	ret

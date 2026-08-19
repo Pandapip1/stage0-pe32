@@ -127,6 +127,15 @@ what M2-Planet and M1-macro compile against instead of
 needs, standing on `x86/ntdll-i386.hex2` the same way `x86/cc_x86.M1` does. See
 their own headers for what each routine does.
 
+The two C libraries need different things set up before `main` runs, so
+`libc-core.M1`'s `_start` calls `:__libc_init` and catm decides what that is:
+`x86/libc-bootstrap.M1`, which does nothing, or `x86/libc-full.M1`, which calls
+M2libc's `__init_malloc` and `__init_io`. The second is not optional and its
+absence is quiet: `stdin`, `stdout` and `stderr` are globals that start NULL,
+so a program linked without it works until the first time it tries to report an
+error and then faults inside `fputs` instead of printing it. hex2 built from C
+did exactly that, on every error path, until this existed.
+
 `M2libc/x86/x86_defs.M1` -- the submodule's copy, not a copy of it -- matters
 more than its name suggests: it is the mnemonic set M2's own code generator
 actually emits, wider than what cc_x86.M1's hand-written assembly happens to
