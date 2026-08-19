@@ -1,0 +1,60 @@
+Additional permission under GNU GPL version 3 section 7
+=======================================================
+
+The authors of the PE32 port grant you the following additional permission,
+under section 7 of the GNU General Public License version 3.
+
+The grant
+---------
+
+  You may distribute the files in this project, and binaries built from them,
+  as part of a package repository, software distribution, operating system
+  image, or similar collection of separately licensed works, without that
+  repository, distribution, image, or collection as a whole becoming subject
+  to the GNU General Public License,
+
+  provided that these files, any modified version of them, and any binary
+  built from them, remain licensed under the GNU General Public License
+  version 3 or later, and that you continue to meet that License's
+  requirements in respect of them, including its requirement to make the
+  corresponding source available to anyone you give a binary to.
+
+  Invoking a program built from these files, or consuming its output, does not
+  by itself make the invoking work a modified version of it.
+
+In short: the surrounding collection does not become GPL, and this stays GPL.
+
+What this does not do
+---------------------
+
+This permission covers aggregation, redistribution and use as a tool. It is
+not a linking exception. Combining this work into a larger program so as to
+form a single work still requires that larger work to be licensed under the
+GNU General Public License.
+
+Section 7 allows a downstream recipient to remove an additional permission
+from a copy they convey. Removing this one leaves plain GPL version 3 or
+later, which is the licence these files carry in any case.
+
+Scope
+-----
+
+This permission is granted in respect of copyright held by the authors of the
+PE32 port, which is the copyright in the code here. These programs were written
+for this project. They implement the same behaviour as upstream's rather than
+reproducing upstream's code, and behaviour, algorithms, file formats and the
+way a project is arranged are not themselves what copyright protects.
+
+Upstream is credited because this is a port and the design is theirs, and
+because some of it does follow upstream's expression closely enough to be worth
+naming. x86/M0_x86.hex2 follows the function decomposition, struct layout and
+in places the instruction sequences of stage0-posix's x86/M0_x86.hex2. The hex0,
+hex1 and hex2 languages are upstream's definitions. Files whose header names
+only the port author -- the header stub and everything in x86/Development --
+have no upstream code in them at all.
+
+Where a file's header names upstream as well, this permission covers the port
+authors' contribution to that file. If you need it to cover the whole of such a
+file, ask upstream.
+
+None of the above is legal advice, and none of it was written by a lawyer.

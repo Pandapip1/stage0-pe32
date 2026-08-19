@@ -1,0 +1,521 @@
+# SPDX-FileCopyrightText: (C) 2016-2021 Jeremiah Orians
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional permission under GNU GPL version 3 section 7:
+# see LICENSE.EXCEPTION in the root of this project.
+#
+# hex0-pe32: the Windows (PE32/i386) port of stage0's hex0 seed.
+#
+# hex0 reads a file of hexadecimal digit pairs and writes the bytes they denote.
+# Assembling this file reproduces hex0.exe byte for byte.
+#
+#   hex0 INPUT OUTPUT
+#     argv[1]        a path, opened for reading
+#     argv[2]        a path, created or truncated for writing
+#     [0-9A-Fa-f]    a hexadecimal digit; two of them make one output byte
+#     '#' or ';'     begins a comment, ignored to end of line
+#     anything else  ignored
+#
+# The POSIX build also does chmod(argv[2], 0700); Windows has no executable bit,
+# so that step has no counterpart here.
+#
+# The image imports nothing: NumberOfRvaAndSizes is 0, so there is no import
+# directory.  ntdll is located through the PEB at run time and the six routines
+# this program calls are resolved from ntdll's export table by name.
+#
+# One section holds the code followed by the data, mapped read/write/execute.
+
+## ==== headers ====
+4D 5A                           # e_magic 'MZ'
+90 00                           # e_cblp
+03 00                           # e_cp
+00 00                           # e_crlc
+04 00                           # e_cparhdr
+00 00                           # e_minalloc
+FF FF                           # e_maxalloc
+00 00                           # e_ss
+B8 00                           # e_sp
+00 00                           # e_csum
+00 00                           # e_ip
+00 00                           # e_cs
+40 00                           # e_lfarlc
+00 00                           # e_ovno
+00 00 00 00 00 00 00 00         # e_res[4]
+00 00                           # e_oemid
+00 00                           # e_oeminfo
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 # e_res2[10]
+40 00 00 00                     # e_lfanew -> PE header at file offset 0x40 (no DOS stub program)
+50 45 00 00                     # Signature 'PE\0\0'
+4C 01                           # Machine = 0x014c (i386)
+01 00                           # NumberOfSections = 1 (code and data share one section)
+00 00 00 00                     # TimeDateStamp = 0: nothing here depends on when it was built
+00 00 00 00                     # PointerToSymbolTable
+00 00 00 00                     # NumberOfSymbols
+60 00                           # SizeOfOptionalHeader = 0x60 (96 = the PE32 optional header with no data directories)
+0F 03                           # Characteristics = 0x030f (executable, 32-bit, no relocations/line numbers/symbols)
+0B 01                           # Magic = 0x010b (PE32)
+02                              # MajorLinkerVersion
+29                              # MinorLinkerVersion
+57 04 00 00                     # SizeOfCode = 0x457
+00 00 00 00                     # SizeOfInitializedData
+00 00 00 00                     # SizeOfUninitializedData
+76 11 00 00                     # AddressOfEntryPoint = 0x1176 -> _start
+00 10 00 00                     # BaseOfCode = 0x1000
+57 14 00 00                     # BaseOfData
+00 00 40 00                     # ImageBase = 0x400000
+00 10 00 00                     # SectionAlignment = 0x1000
+00 02 00 00                     # FileAlignment = 0x200
+04 00                           # MajorOperatingSystemVersion
+00 00                           # MinorOperatingSystemVersion
+01 00                           # MajorImageVersion
+00 00                           # MinorImageVersion
+04 00                           # MajorSubsystemVersion
+00 00                           # MinorSubsystemVersion
+00 00 00 00                     # Win32VersionValue
+00 20 00 00                     # SizeOfImage = 0x2000
+00 02 00 00                     # SizeOfHeaders = 0x200
+0A 72 00 00                     # CheckSum = 0x720a
+03 00                           # Subsystem = 3 (console)
+00 01                           # DllCharacteristics = 0x0100 (NX compatible)
+00 00 20 00                     # SizeOfStackReserve
+00 10 00 00                     # SizeOfStackCommit
+00 00 10 00                     # SizeOfHeapReserve
+00 10 00 00                     # SizeOfHeapCommit
+00 00 00 00                     # LoaderFlags
+00 00 00 00                     # NumberOfRvaAndSizes = 0 (no data directories, so no import table)
+2E 74 65 78 74 00 00 00         # Section[0].Name = '.text'
+57 04 00 00                     # VirtualSize = 0x457 (code + data actually used)
+00 10 00 00                     # VirtualAddress = 0x1000
+57 04 00 00                     # SizeOfRawData = 0x457, the exact length of the program
+00 02 00 00                     # PointerToRawData = 0x200
+00 00 00 00                     # PointerToRelocations
+00 00 00 00                     # PointerToLinenumbers
+00 00                           # NumberOfRelocations
+00 00                           # NumberOfLinenumbers
+20 00 00 E0                     # Characteristics = 0xE0000020 (code, executable, readable, writable)
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 # padding to SizeOfHeaders
+
+## ==== .text : one line per instruction ====
+
+# find_ntdll() -> ntdll base address.
+# TEB (fs:0x30) -> PEB -> Ldr -> InMemoryOrderModuleList.  The first entry in that
+# list is the main EXE and the second is ntdll.  x86 offsets: PEB->Ldr at 0x0C,
+# Ldr->InMemoryOrderModuleList at 0x14.  The list pointer aims at
+# InMemoryOrderLinks (+0x08) while DllBase is at +0x18, hence the closing +0x10.
+#:find_ntdll ; (0x401000)
+	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # eax = PEB (TEB->PEB at fs:0x30 on x86)
+	8B 40 0C                    ; mov eax, [eax + 0x0c]       # eax = PEB->Ldr (PEB_LDR_DATA*)
+	8B 40 14                    ; mov eax, [eax + 0x14]       # eax = Ldr->InMemoryOrderModuleList.Flink
+	8B 00                       ; mov eax, [eax]              # -> 2nd entry: ntdll, by loader convention
+	8B 40 10                    ; mov eax, [eax + 0x10]
+	C3                          ; ret
+
+# resolve_export(module_base, name) -> address, or 0 if not found.
+# stdcall: arguments pushed right to left, callee cleans the stack.
+# Reads e_lfanew (+0x3C) to reach the PE header, then the export directory.
+# AddressOfNames is searched by string compare; the matching index selects an
+# ordinal from AddressOfNameOrdinals, and that ordinal indexes AddressOfFunctions.
+#:resolve_export ; (0x401012)
+	53                          ; push ebx
+	56                          ; push esi
+	57                          ; push edi
+	55                          ; push ebp
+	89 E5                       ; mov ebp, esp
+	8B 5D 14                    ; mov ebx, [ebp + 20]         # module_base
+	8B 43 3C                    ; mov eax, [ebx + 0x3c]       # e_lfanew
+	01 D8                       ; add eax, ebx                # PE header
+	8B 40 78                    ; mov eax, [eax + 0x78]       # DataDirectory[0].VirtualAddress
+	01 D8                       ; add eax, ebx                # IMAGE_EXPORT_DIRECTORY*
+	8B 70 20                    ; mov esi, [eax + 0x20]       # AddressOfNames RVA
+	01 DE                       ; add esi, ebx
+	8B 78 24                    ; mov edi, [eax + 0x24]       # AddressOfNameOrdinals RVA
+	01 DF                       ; add edi, ebx
+	FF 70 1C                    ; push dword [eax + 0x1c]     # AddressOfFunctions RVA (stash)
+	59                          ; pop ecx
+	01 D9                       ; add ecx, ebx                # ecx = AddressOfFunctions (abs)
+	8B 40 18                    ; mov eax, [eax + 0x18]       # NumberOfNames
+	50                          ; push eax                    # loop bound
+	31 C0                       ; xor eax, eax                # eax = index i = 0
+	3B 04 24                    ; cmp eax, [esp]
+	7D 2D                       ; jge .not_found
+	51                          ; push ecx                    # save AddressOfFunctions
+	8B 0C 86                    ; mov ecx, [esi + eax*4]      # Names[i] RVA
+	01 D9                       ; add ecx, ebx                # -> absolute candidate name ptr
+	50                          ; push eax                    # save loop index
+	52                          ; push edx                    # save target-name ptr
+	8B 55 18                    ; mov edx, [ebp + 24]         # reload target name ptr fresh
+	8A 01                       ; mov al, [ecx]               # AL as scratch, not DL: dl is edx's
+	3A 02                       ; cmp al, [edx]
+	75 08                       ; jne .no_match
+	84 C0                       ; test al, al
+	74 0A                       ; je .found
+	41                          ; inc ecx
+	42                          ; inc edx
+	EB F2                       ; jmp .cmp_chars
+	5A                          ; pop edx
+	58                          ; pop eax                     # restore loop index
+	59                          ; pop ecx
+	40                          ; inc eax
+	EB DC                       ; jmp .scan_loop
+	5A                          ; pop edx
+	58                          ; pop eax                     # restore loop index
+	59                          ; pop ecx                     # ecx = AddressOfFunctions (abs)
+	0F B7 14 47                 ; movzx edx, word [edi + eax*2] # NameOrdinals[i]
+	8B 04 91                    ; mov eax, [ecx + edx*4]      # Functions[ordinal] RVA
+	01 D8                       ; add eax, ebx                # -> absolute address
+	EB 02                       ; jmp .cleanup
+	31 C0                       ; xor eax, eax
+	59                          ; pop ecx                     # drop the loop-bound we pushed
+	5D                          ; pop ebp
+	5F                          ; pop edi
+	5E                          ; pop esi
+	5B                          ; pop ebx
+	C2 08 00                    ; ret 8                       # stdcall, callee-clean, 2 args
+
+# next_token() -> eax = the next argument, or 0 when exhausted.
+# esi is the cursor into the command line and is left past the token returned.
+# Skips leading spaces, then takes a bare token up to the next space, or a
+# double-quoted token up to the closing quote.  The terminator is overwritten with
+# a NUL, leaving the token as a NUL-terminated wide string.
+# Characters are UTF-16, so the cursor advances two bytes at a time.
+#:next_token ; (0x401077)
+
+#:.skip ; (0x401077)
+	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 85 08 00 00 00           ; jne .tok_start
+	83 C6 02                    ; add esi, 2
+	E9 EE FF FF FF              ; jmp .skip
+
+#:.tok_start ; (0x401089)
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 52 00 00 00           ; je .none                    # end of command line
+	66 83 3E 22                 ; cmp word [esi], '"'
+	0F 84 1E 00 00 00           ; je .quoted
+	89 F0                       ; mov eax, esi                # token starts here
+
+#:.scan ; (0x40109F)
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 3B 00 00 00           ; je .done                    # last token, already NUL-terminated
+	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 84 29 00 00 00           ; je .cut
+	83 C6 02                    ; add esi, 2
+	E9 E4 FF FF FF              ; jmp .scan
+
+#:.quoted ; (0x4010BB)
+	83 C6 02                    ; add esi, 2                  # skip the opening quote
+	89 F0                       ; mov eax, esi
+
+#:.qscan ; (0x4010C0)
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 1A 00 00 00           ; je .done
+	66 83 3E 22                 ; cmp word [esi], '"'
+	0F 84 08 00 00 00           ; je .cut
+	83 C6 02                    ; add esi, 2
+	E9 E4 FF FF FF              ; jmp .qscan
+
+#:.cut ; (0x4010DC)
+	66 C7 06 00 00              ; mov word [esi], 0           # NUL-terminate in place (ProcessParameters is writable)
+	83 C6 02                    ; add esi, 2
+
+#:.done ; (0x4010E4)
+	C3                          ; ret
+
+#:.none ; (0x4010E5)
+	31 C0                       ; xor eax, eax                # no token
+	C3                          ; ret
+
+# open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition) -> handle.
+# RtlDosPathNameToNtPathName_U converts the DOS path into the NT path
+# NtCreateFile requires, resolving a relative path against the working directory.
+# ntdll allocates the result buffer.  DesiredAccess and CreateDisposition are
+# saved to memory first because that call clobbers the registers holding them.
+# OBJECT_ATTRIBUTES.Length is 24, the x86 size of the structure.
+# FILE_SYNCHRONOUS_IO_NONALERT keeps the file position in the I/O manager, which
+# is why every read and write below passes a NULL ByteOffset and still advances.
+#:open_file ; (0x4010E8)
+	89 0D 09 14 40 00           ; mov [g_access], ecx         # stash DesiredAccess
+	89 15 0D 14 40 00           ; mov [g_disp], edx           # stash CreateDisposition
+	6A 00                       ; push 0x0                    # DirectoryInfo
+	6A 00                       ; push 0x0                    # NtFileNamePart
+	68 2D 14 40 00              ; push nt_path                # NtPathName (UNICODE_STRING, ntdll allocates the buffer)
+	50                          ; push eax                    # DosPathName
+	FF 15 05 14 40 00           ; call [fn_rtlpath]           # resolves a relative path against the working directory
+	C7 05 15 14 40 00 18 00 00 00 ; mov dword [oa], 0x18        # OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)
+	C7 05 19 14 40 00 00 00 00 00 ; mov dword [oa+4], 0x0       # OBJECT_ATTRIBUTES.RootDirectory = NULL
+	C7 05 1D 14 40 00 2D 14 40 00 ; mov dword [oa+8], nt_path   # OBJECT_ATTRIBUTES.ObjectName = &nt_path
+	C7 05 21 14 40 00 40 00 00 00 ; mov dword [oa+12], 0x40     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE
+	C7 05 25 14 40 00 00 00 00 00 ; mov dword [oa+16], 0x0      # OBJECT_ATTRIBUTES.SecurityDescriptor = NULL
+	C7 05 29 14 40 00 00 00 00 00 ; mov dword [oa+20], 0x0      # OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL
+	6A 00                       ; push 0x0                    # EaLength
+	6A 00                       ; push 0x0                    # EaBuffer
+	6A 60                       ; push 0x60                   # CreateOptions = FILE_SYNCHRONOUS_IO_NONALERT|FILE_NON_DIRECTORY_FILE
+	FF 35 0D 14 40 00           ; push dword [g_disp]         # CreateDisposition
+	6A 01                       ; push 0x1                    # ShareAccess = FILE_SHARE_READ
+	68 80 00 00 00              ; push 0x80                   # FileAttributes = FILE_ATTRIBUTE_NORMAL (imm32: 6A 80 would sign-extend)
+	6A 00                       ; push 0x0                    # AllocationSize = NULL
+	68 35 14 40 00              ; push iosb                   # IoStatusBlock
+	68 15 14 40 00              ; push oa                     # ObjectAttributes
+	FF 35 09 14 40 00           ; push dword [g_access]       # DesiredAccess
+	68 11 14 40 00              ; push g_handle               # FileHandle (out)
+	FF 15 F1 13 40 00           ; call [fn_create]
+	A1 11 14 40 00              ; mov eax, [g_handle]
+	C3                          ; ret
+
+# Resolve the six ntdll routines, parse the command line, open both files, then
+# fall into the conversion loop.  ebx holds the ntdll base across the six
+# resolve_export calls.  The command line is PEB->ProcessParameters->CommandLine,
+# a UNICODE_STRING at 0x40 whose Buffer field is at 0x44.  argv[0] is the program
+# name and is discarded.
+#:_start ; (0x401176)
+	E8 85 FE FF FF              ; call find_ntdll
+	89 C3                       ; mov ebx, eax                # ntdll base, held across every resolve_export call
+	68 95 13 40 00              ; push name_NtCreateFile
+	53                          ; push ebx                    # module_base
+	E8 8A FE FF FF              ; call resolve_export
+	A3 F1 13 40 00              ; mov [fn_create], eax
+	68 A2 13 40 00              ; push name_NtReadFile
+	53                          ; push ebx                    # module_base
+	E8 7A FE FF FF              ; call resolve_export
+	A3 F5 13 40 00              ; mov [fn_read], eax
+	68 AD 13 40 00              ; push name_NtWriteFile
+	53                          ; push ebx                    # module_base
+	E8 6A FE FF FF              ; call resolve_export
+	A3 F9 13 40 00              ; mov [fn_write], eax
+	68 B9 13 40 00              ; push name_NtClose
+	53                          ; push ebx                    # module_base
+	E8 5A FE FF FF              ; call resolve_export
+	A3 FD 13 40 00              ; mov [fn_close], eax
+	68 C1 13 40 00              ; push name_NtTerminateProcess
+	53                          ; push ebx                    # module_base
+	E8 4A FE FF FF              ; call resolve_export
+	A3 01 14 40 00              ; mov [fn_exit], eax
+	68 D4 13 40 00              ; push name_RtlDosPath
+	53                          ; push ebx                    # module_base
+	E8 3A FE FF FF              ; call resolve_export
+	A3 05 14 40 00              ; mov [fn_rtlpath], eax
+	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # PEB
+	8B 40 10                    ; mov eax, [eax+0x10]         # PEB->ProcessParameters
+	8B 70 44                    ; mov esi, [eax+0x44]         # ProcessParameters->CommandLine.Buffer (UNICODE_STRING at 0x40, Buffer at +4)
+	E8 89 FE FF FF              ; call next_token             # argv[0]: the program name, discarded
+	E8 84 FE FF FF              ; call next_token             # argv[1]: the input path
+	A3 45 14 40 00              ; mov [arg_in], eax
+	E8 7A FE FF FF              ; call next_token             # argv[2]: the output path
+	A3 49 14 40 00              ; mov [arg_out], eax
+	A1 45 14 40 00              ; mov eax, [arg_in]
+	B9 00 00 10 80              ; mov ecx, 0x80100000         # GENERIC_READ|SYNCHRONIZE
+	BA 01 00 00 00              ; mov edx, 0x1                # FILE_OPEN
+	E8 D2 FE FF FF              ; call open_file
+	A3 3D 14 40 00              ; mov [in_handle], eax
+	A1 49 14 40 00              ; mov eax, [arg_out]
+	B9 00 00 10 40              ; mov ecx, 0x40100000         # GENERIC_WRITE|SYNCHRONIZE
+	BA 05 00 00 00              ; mov edx, 0x5                # FILE_OVERWRITE_IF  -- upstream opens with O_WRONLY|O_CREAT|O_TRUNC
+	E8 B9 FE FF FF              ; call open_file
+	A3 41 14 40 00              ; mov [out_handle], eax
+
+# Read one byte, classify it, and emit one byte per completed pair.
+# NtReadFile returns an NTSTATUS; end of file is STATUS_END_OF_FILE (0xC0000011),
+# which is negative, so a sign test ends the run.
+#:loop ; (0x401234)
+	6A 00                       ; push 0x0                    # Key
+	6A 00                       ; push 0x0                    # ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position
+	6A 01                       ; push 0x1                    # Length = 1
+	68 55 14 40 00              ; push input                  # Buffer
+	68 35 14 40 00              ; push iosb                   # IoStatusBlock
+	6A 00                       ; push 0x0                    # ApcContext
+	6A 00                       ; push 0x0                    # ApcRoutine
+	6A 00                       ; push 0x0                    # Event
+	FF 35 3D 14 40 00           ; push dword [in_handle]      # FileHandle
+	FF 15 F5 13 40 00           ; call [fn_read]              # main loop
+	85 C0                       ; test eax, eax               # NTSTATUS < 0 (STATUS_END_OF_FILE) ends the run
+	0F 88 77 00 00 00           ; js done
+	0F B6 05 55 14 40 00        ; movzx eax, byte [input]
+	E8 8D 00 00 00              ; call hex
+	83 F8 00                    ; cmp eax, 0
+	0F 8C C1 FF FF FF           ; jl loop                     # not a hex digit, ignore
+	83 3D 4D 14 40 00 00        ; cmp dword [toggle], 0x0     # cmp dword [toggle], 0
+	0F 8D 14 00 00 00           ; jge print
+	A3 51 14 40 00              ; mov [accum], eax            # first nibble
+	C7 05 4D 14 40 00 00 00 00 00 ; mov dword [toggle], 0x0     # mov dword [toggle], 0
+	E9 A0 FF FF FF              ; jmp loop
+
+# A pair is complete: write (first << 4) | second as one byte and set toggle back
+# to -1 to await the next pair.
+#:print ; (0x401294)
+	8B 0D 51 14 40 00           ; mov ecx, [accum]
+	C1 E1 04                    ; shl ecx, 4
+	01 C8                       ; add eax, ecx
+	A2 56 14 40 00              ; mov [output], al
+	C7 05 4D 14 40 00 FF FF FF FF ; mov dword [toggle], -0x1    # mov dword [toggle], -1
+	6A 00                       ; push 0x0                    # Key
+	6A 00                       ; push 0x0                    # ByteOffset
+	6A 01                       ; push 0x1                    # Length = 1
+	68 56 14 40 00              ; push output                 # Buffer
+	68 35 14 40 00              ; push iosb                   # IoStatusBlock
+	6A 00                       ; push 0x0                    # ApcContext
+	6A 00                       ; push 0x0                    # ApcRoutine
+	6A 00                       ; push 0x0                    # Event
+	FF 35 41 14 40 00           ; push dword [out_handle]     # FileHandle
+	FF 15 F9 13 40 00           ; call [fn_write]
+	E9 5F FF FF FF              ; jmp loop
+
+# Close both handles and exit.  NtTerminateProcess takes -1, the pseudo-handle
+# for the current process.
+#:done ; (0x4012D5)
+	FF 35 41 14 40 00           ; push dword [out_handle]     # push out_handle
+	FF 15 FD 13 40 00           ; call [fn_close]
+	FF 35 3D 14 40 00           ; push dword [in_handle]      # push in_handle
+	FF 15 FD 13 40 00           ; call [fn_close]
+	6A 00                       ; push 0x0                    # ExitStatus = 0
+	6A FF                       ; push -0x1                   # ProcessHandle = NtCurrentProcess pseudo-handle
+	FF 15 01 14 40 00           ; call [fn_exit]
+
+# hex(eax = byte) -> 0-15, or -1 for a byte that carries no value.
+# '#' and ';' both begin a comment.  Anything that is not a hex digit is ignored.
+#:hex ; (0x4012F7)
+	83 F8 23                    ; cmp eax, '#'
+	0F 84 44 00 00 00           ; je comment
+	83 F8 3B                    ; cmp eax, ';'                # upstream hex0 treats BOTH '#' and ';' as comments
+	0F 84 3B 00 00 00           ; je comment
+	83 F8 30                    ; cmp eax, '0'
+	0F 8C 7D 00 00 00           ; jl other
+	83 F8 3A                    ; cmp eax, '9'+1
+	0F 8C 68 00 00 00           ; jl num
+	83 F8 41                    ; cmp eax, 'A'
+	0F 8C 6B 00 00 00           ; jl other
+	83 F8 47                    ; cmp eax, 'F'+1
+	0F 8C 5E 00 00 00           ; jl high
+	83 F8 61                    ; cmp eax, 'a'
+	0F 8C 59 00 00 00           ; jl other
+	83 F8 67                    ; cmp eax, 'f'+1
+	0F 8C 48 00 00 00           ; jl low
+	E9 4B 00 00 00              ; jmp other
+
+# Discard bytes to end of line, then return -1 through other.
+# End of file inside a comment gives the same result.
+#:comment ; (0x401344)
+	6A 00                       ; push 0x0                    # Key
+	6A 00                       ; push 0x0                    # ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position
+	6A 01                       ; push 0x1                    # Length = 1
+	68 55 14 40 00              ; push input                  # Buffer
+	68 35 14 40 00              ; push iosb                   # IoStatusBlock
+	6A 00                       ; push 0x0                    # ApcContext
+	6A 00                       ; push 0x0                    # ApcRoutine
+	6A 00                       ; push 0x0                    # Event
+	FF 35 3D 14 40 00           ; push dword [in_handle]      # FileHandle
+	FF 15 F5 13 40 00           ; call [fn_read]              # comment: discard to end of line
+	85 C0                       ; test eax, eax
+	0F 88 21 00 00 00           ; js other                    # EOF inside a comment
+	0F B6 05 55 14 40 00        ; movzx eax, byte [input]
+	83 F8 0A                    ; cmp eax, '\n'
+	0F 85 C6 FF FF FF           ; jne comment
+	E9 0C 00 00 00              ; jmp other
+
+# '0'-'9' -> 0-9.
+#:num ; (0x401383)
+	83 E8 30                    ; sub eax, '0'
+	C3                          ; ret
+
+# 'a'-'f' -> 10-15.
+#:low ; (0x401387)
+	83 E8 57                    ; sub eax, 'a'-10
+	C3                          ; ret
+
+# 'A'-'F' -> 10-15.
+#:high ; (0x40138B)
+	83 E8 37                    ; sub eax, 'A'-10
+	C3                          ; ret
+
+# Not part of a hex pair: return -1 so the caller ignores this byte.
+#:other ; (0x40138F)
+	B8 FF FF FF FF              ; mov eax, -0x1               # mov eax, -1  -- ignored byte
+	C3                          ; ret
+
+## ==== .data ====
+
+# Export names, matched by resolve_export.
+#:name_NtCreateFile ; (0x401395)
+4E 74 43 72 65 61 74 65 46 69 6C 65 00 # name_NtCreateFile = "NtCreateFile"
+
+#:name_NtReadFile ; (0x4013A2)
+4E 74 52 65 61 64 46 69 6C 65 00 # name_NtReadFile = "NtReadFile"
+
+#:name_NtWriteFile ; (0x4013AD)
+4E 74 57 72 69 74 65 46 69 6C 65 00 # name_NtWriteFile = "NtWriteFile"
+
+#:name_NtClose ; (0x4013B9)
+4E 74 43 6C 6F 73 65 00         # name_NtClose = "NtClose"
+
+#:name_NtTerminateProcess ; (0x4013C1)
+4E 74 54 65 72 6D 69 6E 61 74 65 50 72 6F 63 65 73 73 00 # name_NtTerminateProcess = "NtTerminateProcess"
+
+#:name_RtlDosPath ; (0x4013D4)
+52 74 6C 44 6F 73 50 61 74 68 4E 61 6D 65 54 6F 4E 74 50 61 74 68 4E 61 6D 65 5F 55 00 # name_RtlDosPath = "RtlDosPathNameToNtPathName_U"
+
+# Resolved routine addresses.  Kept in memory because six will not fit in registers.
+#:fn_create ; (0x4013F1)
+00 00 00 00                     # fn_create: resolved NtCreateFile
+
+#:fn_read ; (0x4013F5)
+00 00 00 00                     # fn_read: resolved NtReadFile
+
+#:fn_write ; (0x4013F9)
+00 00 00 00                     # fn_write: resolved NtWriteFile
+
+#:fn_close ; (0x4013FD)
+00 00 00 00                     # fn_close: resolved NtClose
+
+#:fn_exit ; (0x401401)
+00 00 00 00                     # fn_exit: resolved NtTerminateProcess
+
+#:fn_rtlpath ; (0x401405)
+00 00 00 00                     # fn_rtlpath: resolved RtlDosPathNameToNtPathName_U
+
+# Arguments that must survive the RtlDosPathNameToNtPathName_U call.
+#:g_access ; (0x401409)
+00 00 00 00                     # g_access: DesiredAccess held across the RtlDosPathNameToNtPathName_U call
+
+#:g_disp ; (0x40140D)
+00 00 00 00                     # g_disp: CreateDisposition, same
+
+#:g_handle ; (0x401411)
+00 00 00 00                     # g_handle: NtCreateFile's out-parameter
+
+# OBJECT_ATTRIBUTES: Length, RootDirectory, ObjectName, Attributes, SecurityDescriptor, SecurityQualityOfService.
+#:oa ; (0x401415)
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 # oa: OBJECT_ATTRIBUTES (Length, RootDirectory, ObjectName, Attributes, SecurityDescriptor, SecurityQualityOfService)
+
+# UNICODE_STRING (Length, MaximumLength, Buffer) filled in by RtlDosPathNameToNtPathName_U.
+#:nt_path ; (0x40142D)
+00 00 00 00 00 00 00 00         # nt_path: UNICODE_STRING filled by RtlDosPathNameToNtPathName_U
+
+# IO_STATUS_BLOCK.  Unused here, required by the ABI.
+#:iosb ; (0x401435)
+00 00 00 00 00 00 00 00         # iosb: IO_STATUS_BLOCK, required by the ABI
+
+# The two open files and the argv pointers they came from.
+#:in_handle ; (0x40143D)
+00 00 00 00                     # in_handle: argv[1] opened for reading
+
+#:out_handle ; (0x401441)
+00 00 00 00                     # out_handle: argv[2] opened for writing
+
+#:arg_in ; (0x401445)
+00 00 00 00                     # arg_in: PWSTR argv[1]
+
+#:arg_out ; (0x401449)
+00 00 00 00                     # arg_out: PWSTR argv[2]
+
+# toggle is -1 while awaiting a pair's first nibble, 0 once accum holds it.
+#:toggle ; (0x40144D)
+FF FF FF FF                     # toggle: -1 = waiting for the first nibble, 0 = have it
+
+#:accum ; (0x401451)
+00 00 00 00                     # accum: the first nibble of a pair
+
+# One-byte read and write buffers.
+#:input ; (0x401455)
+00                              # input: 1-byte read buffer
+
+#:output ; (0x401456)
+00                              # output: 1-byte write buffer

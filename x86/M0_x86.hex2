@@ -1,0 +1,1114 @@
+# SPDX-FileCopyrightText: (C) 2016-2021 Jeremiah Orians
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional permission under GNU GPL version 3 section 7:
+# see LICENSE.EXCEPTION in the root of this project.
+#
+# M0-pe32: the Windows (PE32/i386) port of stage0's M0 macro assembler.
+#
+# M0 reads an M1 source file and writes hex2.  It is the first link that reads a
+# language rather than an encoding: a name can stand for a sequence of bytes.
+#
+#   M0 INPUT OUTPUT
+#     argv[1]        an M1 source file
+#     argv[2]        a path, created or truncated for writing
+#
+#   DEFINE name body   name means body from here on
+#   'ABCD'             hex, passed through as written
+#   "text"             text, emitted as two hex digits a character and a 00
+#   !5 @577 %0x100000  an immediate, one/two/four bytes, little-endian
+#   # or ;             a comment, to end of line
+#   anything else      passed through, which is what carries hex2's own syntax
+#
+# A carriage return separates tokens here as well as a newline, which upstream
+# does not do: an M1 file written on Windows would otherwise carry a stray
+# into every token at the end of a line.
+#
+# Tokens become a linked list, and the work is a sequence of passes over it.
+# Nothing is ever freed: malloc hands out the zero-filled memory past the end of
+# the file, so the passes can be as careless with it as upstream's are.
+#
+# This file carries no PE header.  catm puts PE32-i386.hex2 in front of it, the
+# same way upstream catms ELF-i386.hex2 in front of M0_x86.hex2.
+
+## ==== .text : one line per instruction ====
+
+# find_ntdll() -> ntdll base address.
+# TEB (fs:0x30) -> PEB -> Ldr -> InMemoryOrderModuleList.  The first entry in that
+# list is the main EXE and the second is ntdll.
+:find_ntdll
+	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # eax = PEB (TEB->PEB at fs:0x30 on x86)
+	8B 40 0C                    ; mov eax, [eax + 0x0c]       # eax = PEB->Ldr (PEB_LDR_DATA*)
+	8B 40 14                    ; mov eax, [eax + 0x14]       # eax = Ldr->InMemoryOrderModuleList.Flink
+	8B 00                       ; mov eax, [eax]              # -> 2nd entry: ntdll, by loader convention
+	8B 40 10                    ; mov eax, [eax + 0x10]
+	C3                          ; ret
+
+# resolve_export(module_base, name) -> address, or 0 if not found.
+# stdcall: arguments pushed right to left, callee cleans the stack.
+:resolve_export
+	53                          ; push ebx
+	56                          ; push esi
+	57                          ; push edi
+	55                          ; push ebp
+	89 E5                       ; mov ebp, esp
+	8B 5D 14                    ; mov ebx, [ebp + 20]         # module_base
+	8B 43 3C                    ; mov eax, [ebx + 0x3c]       # e_lfanew
+	01 D8                       ; add eax, ebx                # PE header
+	8B 40 78                    ; mov eax, [eax + 0x78]       # DataDirectory[0].VirtualAddress
+	01 D8                       ; add eax, ebx                # IMAGE_EXPORT_DIRECTORY*
+	8B 70 20                    ; mov esi, [eax + 0x20]       # AddressOfNames RVA
+	01 DE                       ; add esi, ebx
+	8B 78 24                    ; mov edi, [eax + 0x24]       # AddressOfNameOrdinals RVA
+	01 DF                       ; add edi, ebx
+	FF 70 1C                    ; push dword [eax + 0x1c]     # AddressOfFunctions RVA (stash)
+	59                          ; pop ecx
+	01 D9                       ; add ecx, ebx                # ecx = AddressOfFunctions (abs)
+	8B 40 18                    ; mov eax, [eax + 0x18]       # NumberOfNames
+	50                          ; push eax                    # loop bound
+	31 C0                       ; xor eax, eax                # eax = index i = 0
+	3B 04 24                    ; cmp eax, [esp]
+	7D 2D                       ; jge .not_found
+	51                          ; push ecx                    # save AddressOfFunctions
+	8B 0C 86                    ; mov ecx, [esi + eax*4]      # Names[i] RVA
+	01 D9                       ; add ecx, ebx                # -> absolute candidate name ptr
+	50                          ; push eax                    # save loop index
+	52                          ; push edx                    # save target-name ptr
+	8B 55 18                    ; mov edx, [ebp + 24]         # reload target name ptr fresh
+	8A 01                       ; mov al, [ecx]               # AL as scratch, not DL: dl is edx's
+	3A 02                       ; cmp al, [edx]
+	75 08                       ; jne .no_match
+	84 C0                       ; test al, al
+	74 0A                       ; je .found
+	41                          ; inc ecx
+	42                          ; inc edx
+	EB F2                       ; jmp .cmp_chars
+	5A                          ; pop edx
+	58                          ; pop eax                     # restore loop index
+	59                          ; pop ecx
+	40                          ; inc eax
+	EB DC                       ; jmp .scan_loop
+	5A                          ; pop edx
+	58                          ; pop eax                     # restore loop index
+	59                          ; pop ecx                     # ecx = AddressOfFunctions (abs)
+	0F B7 14 47                 ; movzx edx, word [edi + eax*2] # NameOrdinals[i]
+	8B 04 91                    ; mov eax, [ecx + edx*4]      # Functions[ordinal] RVA
+	01 D8                       ; add eax, ebx                # -> absolute address
+	EB 02                       ; jmp .cleanup
+	31 C0                       ; xor eax, eax
+	59                          ; pop ecx                     # drop the loop-bound we pushed
+	5D                          ; pop ebp
+	5F                          ; pop edi
+	5E                          ; pop esi
+	5B                          ; pop ebx
+	C2 08 00                    ; ret 8                       # stdcall, callee-clean, 2 args
+
+# next_token() -> eax = the next argument, or 0 when exhausted.
+# esi is the cursor into the command line.  Characters are UTF-16, so it advances
+# two bytes at a time.
+:next_token
+
+:.skip
+	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 85 %.tok_start           ; jne .tok_start
+	83 C6 02                    ; add esi, 2
+	E9 %.skip                   ; jmp .skip
+
+:.tok_start
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 %.none                ; je .none                    # end of command line
+	66 83 3E 22                 ; cmp word [esi], '"'
+	0F 84 %.quoted              ; je .quoted
+	89 F0                       ; mov eax, esi                # token starts here
+
+:.scan
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 %.done                ; je .done                    # last token, already NUL-terminated
+	66 83 3E 20                 ; cmp word [esi], ' '
+	0F 84 %.cut                 ; je .cut
+	83 C6 02                    ; add esi, 2
+	E9 %.scan                   ; jmp .scan
+
+:.quoted
+	83 C6 02                    ; add esi, 2                  # skip the opening quote
+	89 F0                       ; mov eax, esi
+
+:.qscan
+	66 83 3E 00                 ; cmp word [esi], 0
+	0F 84 %.done                ; je .done
+	66 83 3E 22                 ; cmp word [esi], '"'
+	0F 84 %.cut                 ; je .cut
+	83 C6 02                    ; add esi, 2
+	E9 %.qscan                  ; jmp .qscan
+
+:.cut
+	66 C7 06 00 00              ; mov word [esi], 0           # NUL-terminate in place (ProcessParameters is writable)
+	83 C6 02                    ; add esi, 2
+
+:.done
+	C3                          ; ret
+
+:.none
+	31 C0                       ; xor eax, eax                # no token
+	C3                          ; ret
+
+# open_file(eax = path, ecx = DesiredAccess, edx = CreateDisposition) -> handle.
+# RtlDosPathNameToNtPathName_U converts the DOS path into the NT path
+# NtCreateFile requires.
+:open_file
+	89 0D &g_access             ; mov [g_access], ecx         # stash DesiredAccess
+	89 15 &g_disp               ; mov [g_disp], edx           # stash CreateDisposition
+	6A 00                       ; push 0x0                    # DirectoryInfo
+	6A 00                       ; push 0x0                    # NtFileNamePart
+	68 &nt_path                 ; push nt_path                # NtPathName (UNICODE_STRING, ntdll allocates the buffer)
+	50                          ; push eax                    # DosPathName
+	FF 15 &fn_rtlpath           ; call [fn_rtlpath]           # resolves a relative path against the working directory
+	C7 05 &oa 18 00 00 00       ; mov dword [oa], 0x18        # OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)
+	C7 05 &oa_root 00 00 00 00  ; mov dword [oa+4], 0x0       # OBJECT_ATTRIBUTES.RootDirectory = NULL
+	C7 05 &oa_name &nt_path     ; mov dword [oa+8], nt_path   # OBJECT_ATTRIBUTES.ObjectName = &nt_path
+	C7 05 &oa_attr 40 00 00 00  ; mov dword [oa+12], 0x40     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE
+	C7 05 &oa_sd 00 00 00 00    ; mov dword [oa+16], 0x0      # OBJECT_ATTRIBUTES.SecurityDescriptor = NULL
+	C7 05 &oa_sqos 00 00 00 00  ; mov dword [oa+20], 0x0      # OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL
+	6A 00                       ; push 0x0                    # EaLength
+	6A 00                       ; push 0x0                    # EaBuffer
+	6A 60                       ; push 0x60                   # CreateOptions = FILE_SYNCHRONOUS_IO_NONALERT|FILE_NON_DIRECTORY_FILE
+	FF 35 &g_disp               ; push dword [g_disp]         # CreateDisposition
+	6A 01                       ; push 0x1                    # ShareAccess = FILE_SHARE_READ
+	68 80 00 00 00              ; push 0x80                   # FileAttributes = FILE_ATTRIBUTE_NORMAL (imm32: 6A 80 would sign-extend)
+	6A 00                       ; push 0x0                    # AllocationSize = NULL
+	68 &iosb                    ; push iosb                   # IoStatusBlock
+	68 &oa                      ; push oa                     # ObjectAttributes
+	FF 35 &g_access             ; push dword [g_access]       # DesiredAccess
+	68 &g_handle                ; push g_handle               # FileHandle (out)
+	FF 15 &fn_create            ; call [fn_create]
+	A1 &g_handle                ; mov eax, [g_handle]
+	C3                          ; ret
+
+# fgetc() -> eax = the next input byte, or -4 at end of file.
+# -4 rather than -1 because that is the value upstream's fgetc returns, and
+# Store_Atom and Tokenize_Line compare against it.
+:fgetc
+	6A 00                       ; push 0x0                    # Key
+	6A 00                       ; push 0x0                    # ByteOffset = NULL: FILE_SYNCHRONOUS_IO_NONALERT keeps the file position
+	6A 01                       ; push 0x1                    # Length = 1
+	68 &inbuf                   ; push inbuf                  # Buffer
+	68 &iosb                    ; push iosb                   # IoStatusBlock
+	6A 00                       ; push 0x0                    # ApcContext
+	6A 00                       ; push 0x0                    # ApcRoutine
+	6A 00                       ; push 0x0                    # Event
+	FF 35 &in_handle            ; push dword [in_handle]      # FileHandle
+	FF 15 &fn_read              ; call [fn_read]
+	85 C0                       ; test eax, eax               # NTSTATUS < 0 (STATUS_END_OF_FILE) is the end
+	0F 88 %fgetc.eof            ; js fgetc.eof
+	0F B6 05 &inbuf             ; movzx eax, byte [inbuf]
+	C3                          ; ret
+
+:fgetc.eof
+	B8 FC FF FF FF              ; mov eax, -0x4               # mov eax, -4  -- EOF, as upstream reports it
+	C3                          ; ret
+
+# fputc(al = byte).  One write per byte, as upstream does it.
+:fputc
+	A2 &outbuf                  ; mov [outbuf], al
+	6A 00                       ; push 0x0                    # Key
+	6A 00                       ; push 0x0                    # ByteOffset
+	6A 01                       ; push 0x1                    # Length = 1
+	68 &outbuf                  ; push outbuf                 # Buffer
+	68 &iosb                    ; push iosb                   # IoStatusBlock
+	6A 00                       ; push 0x0                    # ApcContext
+	6A 00                       ; push 0x0                    # ApcRoutine
+	6A 00                       ; push 0x0                    # Event
+	FF 35 &out_handle           ; push dword [out_handle]     # FileHandle
+	FF 15 &fn_write             ; call [fn_write]
+	C3                          ; ret
+
+# malloc(eax = size) -> eax = pointer.
+# A bump allocator over the memory past the end of the file.  The loader zeroed
+# it, so this is calloc as well, which is what every caller assumes.  Nothing is
+# ever freed; upstream calls brk twice for the same effect.
+:malloc
+	53                          ; push ebx
+	8B 1D &malloc_ptr           ; mov ebx, [malloc_ptr]
+	01 05 &malloc_ptr           ; add [malloc_ptr], eax
+	89 D8                       ; mov eax, ebx                # the block starts where the cursor was
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# In_Set(eax = char, ebx = set) -> 1 if the character is in the NUL-terminated set.
+:In_Set
+	53                          ; push ebx
+	51                          ; push ecx
+
+:In_Set.loop
+	8A 0B                       ; mov cl, [ebx]
+	0F B6 C9                    ; movzx ecx, cl
+	85 C9                       ; test ecx, ecx
+	0F 84 %In_Set.false         ; je In_Set.false             # the NUL ends the set
+	39 C8                       ; cmp eax, ecx
+	0F 84 %In_Set.true          ; je In_Set.true
+	43                          ; inc ebx
+	E9 %In_Set.loop             ; jmp In_Set.loop
+
+:In_Set.true
+	B8 01 00 00 00              ; mov eax, 0x1                # mov eax, 1
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+:In_Set.false
+	31 C0                       ; xor eax, eax
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# match(eax, ebx) -> 0 if the two strings are equal, 1 if not.
+:match
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C2                       ; mov edx, eax                # walk both strings together
+
+:match.loop
+	8A 0A                       ; mov cl, [edx]
+	0F B6 C9                    ; movzx ecx, cl
+	8A 03                       ; mov al, [ebx]
+	0F B6 C0                    ; movzx eax, al
+	39 C1                       ; cmp ecx, eax
+	0F 85 %match.false          ; jne match.false
+	85 C9                       ; test ecx, ecx
+	0F 84 %match.true           ; je match.true               # both hit NUL together
+	42                          ; inc edx
+	43                          ; inc ebx
+	E9 %match.loop              ; jmp match.loop
+
+:match.true
+	31 C0                       ; xor eax, eax                # 0 means equal, as upstream returns it
+	E9 %match.done              ; jmp match.done
+
+:match.false
+	B8 01 00 00 00              ; mov eax, 0x1                # mov eax, 1
+
+:match.done
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# string_length(eax) -> the number of bytes before the NUL.
+:string_length
+	53                          ; push ebx
+	51                          ; push ecx
+	89 C3                       ; mov ebx, eax
+	31 C9                       ; xor ecx, ecx
+
+:string_length.loop
+	8A 04 0B                    ; mov al, [ebx+ecx]
+	0F B6 C0                    ; movzx eax, al
+	85 C0                       ; test eax, eax
+	0F 84 %string_length.done   ; je string_length.done
+	41                          ; inc ecx
+	E9 %string_length.loop      ; jmp string_length.loop
+
+:string_length.done
+	89 C8                       ; mov eax, ecx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# hex32l/hex16l/hex8(eax = value, ebx = destination): write the value as hex
+# digits and advance ebx past them.  Each falls into the next, and each half is
+# written low part first, so a 32-bit value comes out in little-endian byte
+# order: 0x00100000 becomes 00001000.
+:hex32l
+	50                          ; push eax                    # protect the top half
+	E8 %hex16l                  ; call hex16l
+	58                          ; pop eax
+	C1 E8 10                    ; shr eax, 16                 # the low half went out first, so this is little-endian
+
+:hex16l
+	50                          ; push eax
+	E8 %hex8                    ; call hex8
+	58                          ; pop eax
+	C1 E8 08                    ; shr eax, 8
+
+:hex8
+	50                          ; push eax
+	C1 E8 04                    ; shr eax, 4                  # high nibble first
+	E8 %hex4                    ; call hex4
+	58                          ; pop eax
+
+:hex4
+	83 E0 0F                    ; and eax, 0xf
+	04 30                       ; add al, '0'
+	3C 39                       ; cmp al, '9'
+	0F 86 %hex1                 ; jbe hex1
+	04 07                       ; add al, 7                   # shift into 'A'-'F'
+
+:hex1
+	88 03                       ; mov [ebx], al
+	83 C3 01                    ; add ebx, 1
+	C3                          ; ret
+
+# numerate_string(eax = string) -> its value.
+# "0x" selects hex and anything else is decimal, with a leading '-' to negate.
+# The 0x test comes first and looks at S[1], so a negative hex number is not a
+# thing: "-0x10" takes the decimal path and fails on the 'x'.  Hex digits are
+# upper case only, for the same reason -- 'a' lands past 15 and fails.  A string
+# that is not a number returns 0, which the caller tells from a real zero by
+# looking at the first digit.
+#
+# Upstream leaves the negation flag in EDI uninitialised, and gets away with it
+# because EDI holds its malloc pointer and is never 1.  This zeroes it, which is
+# the same behaviour for every input and no behaviour for none.
+:numerate_string
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	57                          ; push edi
+	89 C3                       ; mov ebx, eax                # S
+	31 C0                       ; xor eax, eax                # VALUE = 0
+	31 FF                       ; xor edi, edi                # NEGATIVE = 0  -- upstream never initialises this; see the note
+	8A 4B 01                    ; mov cl, [ebx+1]
+	0F B6 C9                    ; movzx ecx, cl               # S[1]
+	83 F9 78                    ; cmp ecx, 'x'
+	0F 84 %numerate_string.hex  ; je numerate_string.hex      # tested before the sign, so 0x is only ever positive
+	B9 00 00 00 00              ; mov ecx, 0
+	8A 0B                       ; mov cl, [ebx]
+	0F B6 C9                    ; movzx ecx, cl               # S[0]
+	83 F9 2D                    ; cmp ecx, '-'
+	0F 85 %numerate_string.dec  ; jne numerate_string.dec
+	BF 01 00 00 00              ; mov edi, 0x1                # mov edi, 1
+	83 C3 01                    ; add ebx, 1
+
+:numerate_string.dec
+	8A 0B                       ; mov cl, [ebx]
+	0F B6 C9                    ; movzx ecx, cl
+	83 F9 00                    ; cmp ecx, 0
+	0F 84 %numerate_string.decdone ; je numerate_string.decdone
+	6B C0 0A                    ; imul eax, 10
+	83 E9 30                    ; sub ecx, '0'
+	83 F9 09                    ; cmp ecx, 9
+	0F 8F %numerate_string.fail ; jg numerate_string.fail
+	83 F9 00                    ; cmp ecx, 0
+	0F 8C %numerate_string.fail ; jl numerate_string.fail
+	01 C8                       ; add eax, ecx
+	83 C3 01                    ; add ebx, 1
+	E9 %numerate_string.dec     ; jmp numerate_string.dec
+
+:numerate_string.decdone
+	83 FF 01                    ; cmp edi, 1
+	0F 85 %numerate_string.done ; jne numerate_string.done
+	6B C0 FF                    ; imul eax, -1
+	E9 %numerate_string.done    ; jmp numerate_string.done
+
+:numerate_string.hex
+	83 C3 02                    ; add ebx, 2                  # step over the 0x
+
+:numerate_string.hexloop
+	8A 0B                       ; mov cl, [ebx]
+	0F B6 C9                    ; movzx ecx, cl
+	83 F9 00                    ; cmp ecx, 0
+	0F 84 %numerate_string.done ; je numerate_string.done
+	C1 E0 04                    ; shl eax, 4
+	83 E9 30                    ; sub ecx, '0'
+	83 F9 0A                    ; cmp ecx, 10
+	0F 8C %numerate_string.digit ; jl numerate_string.digit
+	83 E9 07                    ; sub ecx, 7                  # push A-F into range; lower case does not survive this
+
+:numerate_string.digit
+	83 F9 0F                    ; cmp ecx, 15
+	0F 8F %numerate_string.fail ; jg numerate_string.fail
+	83 F9 00                    ; cmp ecx, 0
+	0F 8C %numerate_string.fail ; jl numerate_string.fail
+	01 C8                       ; add eax, ecx
+	83 C3 01                    ; add ebx, 1
+	E9 %numerate_string.hexloop ; jmp numerate_string.hexloop
+
+:numerate_string.fail
+	31 C0                       ; xor eax, eax                # not a number: return zero and let the caller decide
+
+:numerate_string.done
+	5F                          ; pop edi
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# express_number(eax = value, ebx = prefix) -> a fresh hex string.
+# The prefix chooses the width: '%' four bytes, '@' two, anything else one.  That
+# is how an M1 source says how wide an immediate should be.
+:express_number
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 D9                       ; mov ecx, ebx                # CH
+	89 C3                       ; mov ebx, eax                # protect VALUE
+	83 F9 25                    ; cmp ecx, '%'
+	0F 85 %express_number.at    ; jne express_number.at
+	B8 09 00 00 00              ; mov eax, 0x9                # mov eax, 9  -- eight digits and a NUL
+	E8 %malloc                  ; call malloc
+	93                          ; xchg eax, ebx               # eax = VALUE, ebx = S
+	53                          ; push ebx                    # protect S; the hex routines advance it
+	E8 %hex32l                  ; call hex32l
+	E9 %express_number.done     ; jmp express_number.done
+
+:express_number.at
+	83 F9 40                    ; cmp ecx, '@'
+	0F 85 %express_number.one   ; jne express_number.one
+	B8 05 00 00 00              ; mov eax, 0x5                # mov eax, 5
+	E8 %malloc                  ; call malloc
+	93                          ; xchg eax, ebx
+	53                          ; push ebx
+	E8 %hex16l                  ; call hex16l
+	E9 %express_number.done     ; jmp express_number.done
+
+:express_number.one
+	B8 03 00 00 00              ; mov eax, 0x3                # mov eax, 3
+	E8 %malloc                  ; call malloc
+	93                          ; xchg eax, ebx
+	53                          ; push ebx
+	E8 %hex8                    ; call hex8
+
+:express_number.done
+	58                          ; pop eax                     # S
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Store_Atom(ecx = first character) -> a fresh string.
+# Reads to the next space, tab or newline, consuming it.
+# The string's start is held in esi, not edx: every read goes through NtReadFile,
+# and the Windows calling convention leaves eax, ecx and edx to the callee.
+:Store_Atom
+	53                          ; push ebx
+	56                          ; push esi
+	57                          ; push edi
+	B8 00 01 00 00              ; mov eax, 0x100              # mov eax, 256
+	E8 %malloc                  ; call malloc
+	89 C6                       ; mov esi, eax                # keep the start to return; esi survives a call, edx does not
+	89 C7                       ; mov edi, eax                # cursor
+
+:Store_Atom.loop
+	89 C8                       ; mov eax, ecx
+	88 07                       ; mov [edi], al
+	47                          ; inc edi
+	E8 %fgetc                   ; call fgetc
+	89 C1                       ; mov ecx, eax
+	83 F8 FC                    ; cmp eax, -4
+	0F 84 %Store_Atom.done      ; je Store_Atom.done          # end of file ends the atom too
+	BB &terminators             ; mov ebx, terminators
+	E8 %In_Set                  ; call In_Set
+	85 C0                       ; test eax, eax
+	0F 84 %Store_Atom.loop      ; je Store_Atom.loop
+
+:Store_Atom.done
+	89 F0                       ; mov eax, esi
+	5F                          ; pop edi
+	5E                          ; pop esi
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Store_String(ecx = quote) -> a fresh string.
+# Reads to the matching quote.  The opening quote is kept as the first character,
+# which is how Process_String later tells '...' from "..." ; the closing one is
+# dropped.
+:Store_String
+	53                          ; push ebx
+	56                          ; push esi
+	57                          ; push edi
+	51                          ; push ecx                    # the quote is also the terminator
+	B8 00 01 00 00              ; mov eax, 0x100              # mov eax, 256
+	E8 %malloc                  ; call malloc
+	89 C6                       ; mov esi, eax
+	89 C7                       ; mov edi, eax
+	5B                          ; pop ebx                     # ebx = the quote character
+
+:Store_String.loop
+	89 C8                       ; mov eax, ecx
+	88 07                       ; mov [edi], al
+	47                          ; inc edi
+	E8 %fgetc                   ; call fgetc
+	89 C1                       ; mov ecx, eax
+	83 F8 FC                    ; cmp eax, -4
+	0F 84 %Store_String.done    ; je Store_String.done
+	39 D8                       ; cmp eax, ebx
+	0F 85 %Store_String.loop    ; jne Store_String.loop
+
+:Store_String.done
+	89 F0                       ; mov eax, esi                # the opening quote is kept, the closing one is not
+	5F                          ; pop edi
+	5E                          ; pop esi
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Tokenize_Line(): read one token and put it on the front of the list.
+# '#' and ';' begin a comment that runs to end of line.  The list is built
+# backwards and reversed once the input is exhausted, which costs one pass and
+# saves walking to the end for every token.
+:Tokenize_Line
+
+:Tokenize_Line.restart
+	E8 %fgetc                   ; call fgetc
+	A3 &tok_c                   ; mov [tok_c], eax
+	83 F8 FC                    ; cmp eax, -4
+	0F 84 %Tokenize_Line.eof    ; je Tokenize_Line.eof
+	BB &comments                ; mov ebx, comments
+	E8 %In_Set                  ; call In_Set
+	85 C0                       ; test eax, eax
+	0F 85 %Tokenize_Line.comment ; jne Tokenize_Line.comment
+	A1 &tok_c                   ; mov eax, [tok_c]
+	BB &terminators             ; mov ebx, terminators
+	E8 %In_Set                  ; call In_Set
+	85 C0                       ; test eax, eax
+	0F 85 %Tokenize_Line.restart ; jne Tokenize_Line.restart   # whitespace between tokens
+	B8 20 00 00 00              ; mov eax, 0x20               # mov eax, 32
+	E8 %malloc                  ; call malloc
+	A3 &tok_p                   ; mov [tok_p], eax
+	8B 1D &head                 ; mov ebx, [head]
+	89 18                       ; mov [eax], ebx              # p->NEXT = head; the list is built backwards
+	A3 &head                    ; mov [head], eax
+	A1 &tok_c                   ; mov eax, [tok_c]
+	BB &string_char             ; mov ebx, string_char
+	E8 %In_Set                  ; call In_Set
+	85 C0                       ; test eax, eax
+	0F 85 %Tokenize_Line.string ; jne Tokenize_Line.string
+	8B 0D &tok_c                ; mov ecx, [tok_c]
+	E8 %Store_Atom              ; call Store_Atom
+	8B 1D &tok_p                ; mov ebx, [tok_p]
+	89 43 10                    ; mov [ebx+16], eax           # p->TEXT
+	C3                          ; ret
+
+:Tokenize_Line.string
+	8B 0D &tok_c                ; mov ecx, [tok_c]
+	E8 %Store_String            ; call Store_String
+	8B 1D &tok_p                ; mov ebx, [tok_p]
+	89 43 10                    ; mov [ebx+16], eax           # p->TEXT
+	C7 43 08 02 00 00 00        ; mov dword [ebx+8], 2        # p->TYPE = STRING
+	C3                          ; ret
+
+:Tokenize_Line.comment
+	E8 %fgetc                   ; call fgetc
+	83 F8 FC                    ; cmp eax, -4
+	0F 84 %Tokenize_Line.eof    ; je Tokenize_Line.eof
+	83 F8 0A                    ; cmp eax, 10
+	0F 85 %Tokenize_Line.comment ; jne Tokenize_Line.comment
+	E9 %Tokenize_Line.restart   ; jmp Tokenize_Line.restart
+
+:Tokenize_Line.eof
+	C7 05 &eof_flag 01 00 00 00 ; mov dword [eof_flag], 0x1   # mov dword [eof_flag], 1
+	C3                          ; ret
+
+# Reverse_List(eax = list) -> the same list, reversed.
+:Reverse_List
+	53                          ; push ebx
+	51                          ; push ecx
+	31 DB                       ; xor ebx, ebx                # prev = NULL
+
+:Reverse_List.loop
+	85 C0                       ; test eax, eax
+	0F 84 %Reverse_List.done    ; je Reverse_List.done
+	8B 08                       ; mov ecx, [eax]              # next
+	89 18                       ; mov [eax], ebx              # cur->NEXT = prev
+	89 C3                       ; mov ebx, eax
+	89 C8                       ; mov eax, ecx
+	E9 %Reverse_List.loop       ; jmp Reverse_List.loop
+
+:Reverse_List.done
+	89 D8                       ; mov eax, ebx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Identify_Macros(eax = list): find DEFINE.
+# A DEFINE token takes over the two tokens after it: it keeps the name as its
+# TEXT and the expansion as its EXPRESSION, and unlinks both.  It stays in the
+# list as a MACRO so Line_Macro can find it, and Print_Hex skips it.
+:Identify_Macros
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C2                       ; mov edx, eax                # I = HEAD
+
+:Identify_Macros.loop
+	8B 42 10                    ; mov eax, [edx+16]           # I->TEXT
+	BB &DEFINE_str              ; mov ebx, DEFINE_str
+	E8 %match                   ; call match
+	85 C0                       ; test eax, eax
+	0F 85 %Identify_Macros.next ; jne Identify_Macros.next
+	C7 42 08 01 00 00 00        ; mov dword [edx+8], 1        # I->TYPE = MACRO
+	8B 02                       ; mov eax, [edx]              # I->NEXT, the name
+	8B 48 10                    ; mov ecx, [eax+16]
+	89 4A 10                    ; mov [edx+16], ecx           # I->TEXT = name
+	8B 18                       ; mov ebx, [eax]              # the expansion token
+	8B 4B 10                    ; mov ecx, [ebx+16]
+	8B 43 08                    ; mov eax, [ebx+8]            # its TYPE
+	83 F8 02                    ; cmp eax, 2
+	0F 85 %Identify_Macros.plain ; jne Identify_Macros.plain
+	41                          ; inc ecx                     # a string expansion starts after the quote
+
+:Identify_Macros.plain
+	89 4A 18                    ; mov [edx+24], ecx           # I->EXPRESSION
+	8B 03                       ; mov eax, [ebx]
+	89 02                       ; mov [edx], eax              # I->NEXT skips the two tokens just consumed
+
+:Identify_Macros.next
+	8B 12                       ; mov edx, [edx]
+	85 D2                       ; test edx, edx
+	0F 85 %Identify_Macros.loop ; jne Identify_Macros.loop
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# Set_Expression(eax = list, ebx = name, ecx = expansion):
+# give every later token with that name this expansion.  Macros are left alone,
+# so a definition cannot rewrite another definition's name.
+:Set_Expression
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	56                          ; push esi
+	89 C2                       ; mov edx, eax                # I
+	89 CE                       ; mov esi, ecx                # EXP
+
+:Set_Expression.loop
+	8B 42 08                    ; mov eax, [edx+8]
+	83 F8 01                    ; cmp eax, 1
+	0F 84 %Set_Expression.next  ; je Set_Expression.next      # leave macros alone
+	8B 42 10                    ; mov eax, [edx+16]
+	E8 %match                   ; call match
+	85 C0                       ; test eax, eax
+	0F 85 %Set_Expression.next  ; jne Set_Expression.next
+	89 72 18                    ; mov [edx+24], esi           # I->EXPRESSION = EXP
+
+:Set_Expression.next
+	8B 12                       ; mov edx, [edx]
+	85 D2                       ; test edx, edx
+	0F 85 %Set_Expression.loop  ; jne Set_Expression.loop
+	5E                          ; pop esi
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# Line_Macro(eax = list): apply each macro to everything after it.
+:Line_Macro
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C2                       ; mov edx, eax
+
+:Line_Macro.loop
+	8B 42 08                    ; mov eax, [edx+8]
+	83 F8 01                    ; cmp eax, 1
+	0F 85 %Line_Macro.next      ; jne Line_Macro.next
+	8B 02                       ; mov eax, [edx]
+	85 C0                       ; test eax, eax
+	0F 84 %Line_Macro.next      ; je Line_Macro.next          # nothing follows to substitute into
+	8B 5A 10                    ; mov ebx, [edx+16]           # the macro name
+	8B 4A 18                    ; mov ecx, [edx+24]           # its expansion
+	E8 %Set_Expression          ; call Set_Expression
+
+:Line_Macro.next
+	8B 12                       ; mov edx, [edx]
+	85 D2                       ; test edx, edx
+	0F 85 %Line_Macro.loop      ; jne Line_Macro.loop
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# Process_String(eax = list): turn a quoted token into hex.
+# '...' is already hex and passes through as written.  "..." is text, and becomes
+# two hex digits per character plus a 00 terminator.
+:Process_String
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C1                       ; mov ecx, eax                # I
+
+:Process_String.loop
+	8B 41 08                    ; mov eax, [ecx+8]
+	83 F8 02                    ; cmp eax, 2
+	0F 85 %Process_String.next  ; jne Process_String.next
+	8B 59 10                    ; mov ebx, [ecx+16]           # I->TEXT
+	8A 03                       ; mov al, [ebx]
+	0F B6 C0                    ; movzx eax, al
+	83 F8 27                    ; cmp eax, 0x27
+	0F 85 %Process_String.raw   ; jne Process_String.raw
+	83 C3 01                    ; add ebx, 1
+	89 59 18                    ; mov [ecx+24], ebx           # '...' passes through as written
+	E9 %Process_String.next     ; jmp Process_String.next
+
+:Process_String.raw
+	89 D8                       ; mov eax, ebx
+	E8 %string_length           ; call string_length
+	C1 E8 02                    ; shr eax, 2
+	83 C0 01                    ; add eax, 1
+	C1 E0 03                    ; shl eax, 3                  # room enough for two digits a character
+	E8 %malloc                  ; call malloc
+	89 DA                       ; mov edx, ebx
+	83 C2 01                    ; add edx, 1                  # S = I->TEXT + 1, past the quote
+	89 41 18                    ; mov [ecx+24], eax
+	89 C3                       ; mov ebx, eax                # the hex cursor
+
+:Process_String.rawloop
+	8A 02                       ; mov al, [edx]
+	0F B6 C0                    ; movzx eax, al
+	83 C2 01                    ; add edx, 1
+	3C 00                       ; cmp al, 0
+	9C                          ; pushf                       # the NUL is emitted too, then ends the loop
+	E8 %hex8                    ; call hex8
+	9D                          ; popf
+	0F 85 %Process_String.rawloop ; jne Process_String.rawloop
+
+:Process_String.next
+	8B 09                       ; mov ecx, [ecx]
+	85 C9                       ; test ecx, ecx
+	0F 85 %Process_String.loop  ; jne Process_String.loop
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# Eval_Immediates(eax = list): turn a prefixed number into hex.
+# Only tokens that no macro claimed are considered.
+:Eval_Immediates
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C2                       ; mov edx, eax
+
+:Eval_Immediates.loop
+	8B 42 08                    ; mov eax, [edx+8]
+	83 F8 01                    ; cmp eax, 1
+	0F 84 %Eval_Immediates.next ; je Eval_Immediates.next
+	8B 42 18                    ; mov eax, [edx+24]
+	85 C0                       ; test eax, eax
+	0F 85 %Eval_Immediates.next ; jne Eval_Immediates.next    # already has an expression
+	8B 42 10                    ; mov eax, [edx+16]
+	8A 18                       ; mov bl, [eax]
+	0F B6 DB                    ; movzx ebx, bl               # TEXT[0], the width prefix
+	83 C0 01                    ; add eax, 1
+	8A 08                       ; mov cl, [eax]
+	0F B6 C9                    ; movzx ecx, cl               # TEXT[1]
+	E8 %numerate_string         ; call numerate_string
+	85 C0                       ; test eax, eax
+	0F 85 %Eval_Immediates.value ; jne Eval_Immediates.value
+	83 F9 30                    ; cmp ecx, '0'
+	0F 85 %Eval_Immediates.next ; jne Eval_Immediates.next    # zero only counts if written as one
+
+:Eval_Immediates.value
+	E8 %express_number          ; call express_number
+	89 42 18                    ; mov [edx+24], eax
+
+:Eval_Immediates.next
+	8B 12                       ; mov edx, [edx]
+	85 D2                       ; test edx, edx
+	0F 85 %Eval_Immediates.loop ; jne Eval_Immediates.loop
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# Preserve_Other(eax = list): anything with no expression yet stands for
+# itself.  That is what carries hex2's labels and pointers through untouched.
+:Preserve_Other
+	50                          ; push eax
+	53                          ; push ebx
+	51                          ; push ecx
+	52                          ; push edx
+	89 C2                       ; mov edx, eax
+
+:Preserve_Other.loop
+	8B 42 08                    ; mov eax, [edx+8]
+	83 F8 01                    ; cmp eax, 1
+	0F 84 %Preserve_Other.next  ; je Preserve_Other.next
+	8B 42 18                    ; mov eax, [edx+24]
+	85 C0                       ; test eax, eax
+	0F 85 %Preserve_Other.next  ; jne Preserve_Other.next
+	8B 42 10                    ; mov eax, [edx+16]
+	89 42 18                    ; mov [edx+24], eax           # anything left over stands for itself
+
+:Preserve_Other.next
+	8B 12                       ; mov edx, [edx]
+	85 D2                       ; test edx, edx
+	0F 85 %Preserve_Other.loop  ; jne Preserve_Other.loop
+	5A                          ; pop edx
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	58                          ; pop eax
+	C3                          ; ret
+
+# File_Print(eax = string): write it, if it is not NULL.
+:File_Print
+	53                          ; push ebx
+	51                          ; push ecx
+	89 C3                       ; mov ebx, eax
+	85 C0                       ; test eax, eax
+	0F 84 %File_Print.done      ; je File_Print.done          # a NULL expression prints as nothing
+
+:File_Print.loop
+	8A 03                       ; mov al, [ebx]
+	0F B6 C0                    ; movzx eax, al
+	85 C0                       ; test eax, eax
+	0F 84 %File_Print.done      ; je File_Print.done
+	E8 %fputc                   ; call fputc
+	83 C3 01                    ; add ebx, 1
+	E9 %File_Print.loop         ; jmp File_Print.loop
+
+:File_Print.done
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Print_Hex(eax = list): write each expression on its own line.
+:Print_Hex
+	53                          ; push ebx
+	51                          ; push ecx
+	89 C3                       ; mov ebx, eax
+
+:Print_Hex.loop
+	8B 43 08                    ; mov eax, [ebx+8]
+	83 F8 01                    ; cmp eax, 1
+	0F 84 %Print_Hex.next       ; je Print_Hex.next           # a macro defines, it does not emit
+	8B 43 18                    ; mov eax, [ebx+24]
+	E8 %File_Print              ; call File_Print
+	B8 0A 00 00 00              ; mov eax, 0xa                # mov eax, 10
+	E8 %fputc                   ; call fputc
+
+:Print_Hex.next
+	8B 1B                       ; mov ebx, [ebx]
+	85 DB                       ; test ebx, ebx
+	0F 85 %Print_Hex.loop       ; jne Print_Hex.loop
+	59                          ; pop ecx
+	5B                          ; pop ebx
+	C3                          ; ret
+
+# Resolve the six ntdll routines, open both files, read every token, then run the
+# passes in order: reverse, find macros, apply them, convert strings, convert
+# immediates, preserve the rest, print.
+:_start
+	E8 %find_ntdll              ; call find_ntdll
+	89 C3                       ; mov ebx, eax                # ntdll base, held across every resolve_export call
+	68 &name_NtCreateFile       ; push name_NtCreateFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_create               ; mov [fn_create], eax
+	68 &name_NtReadFile         ; push name_NtReadFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_read                 ; mov [fn_read], eax
+	68 &name_NtWriteFile        ; push name_NtWriteFile
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_write                ; mov [fn_write], eax
+	68 &name_NtClose            ; push name_NtClose
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_close                ; mov [fn_close], eax
+	68 &name_NtTerminateProcess ; push name_NtTerminateProcess
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_exit                 ; mov [fn_exit], eax
+	68 &name_RtlDosPath         ; push name_RtlDosPath
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_rtlpath              ; mov [fn_rtlpath], eax
+	C7 05 &malloc_ptr &arena    ; mov dword [malloc_ptr], arena # the loader zeroed it for us
+	64 A1 30 00 00 00           ; mov eax, [fs:0x30]          # PEB
+	8B 40 10                    ; mov eax, [eax+0x10]         # PEB->ProcessParameters
+	8B 70 44                    ; mov esi, [eax+0x44]         # ProcessParameters->CommandLine.Buffer (UNICODE_STRING at 0x40, Buffer at +4)
+	E8 %next_token              ; call next_token             # argv[0]: the program name, discarded
+	E8 %next_token              ; call next_token             # argv[1]: the input path
+	A3 &arg_in                  ; mov [arg_in], eax
+	E8 %next_token              ; call next_token             # argv[2]: the output path
+	A3 &arg_out                 ; mov [arg_out], eax
+	A1 &arg_in                  ; mov eax, [arg_in]
+	B9 00 00 10 80              ; mov ecx, 0x80100000         # GENERIC_READ|SYNCHRONIZE
+	BA 01 00 00 00              ; mov edx, 0x1                # FILE_OPEN
+	E8 %open_file               ; call open_file
+	A3 &in_handle               ; mov [in_handle], eax
+	A1 &arg_out                 ; mov eax, [arg_out]
+	B9 00 00 10 40              ; mov ecx, 0x40100000         # GENERIC_WRITE|SYNCHRONIZE
+	BA 05 00 00 00              ; mov edx, 0x5                # FILE_OVERWRITE_IF
+	E8 %open_file               ; call open_file
+	A3 &out_handle              ; mov [out_handle], eax
+
+:_start.tokenize
+	E8 %Tokenize_Line           ; call Tokenize_Line
+	A1 &eof_flag                ; mov eax, [eof_flag]
+	85 C0                       ; test eax, eax
+	0F 84 %_start.tokenize      ; je _start.tokenize
+	A1 &head                    ; mov eax, [head]
+	85 C0                       ; test eax, eax
+	0F 84 %_start.done          ; je _start.done              # an empty input makes an empty output
+	E8 %Reverse_List            ; call Reverse_List
+	A3 &head                    ; mov [head], eax
+	A1 &head                    ; mov eax, [head]
+	E8 %Identify_Macros         ; call Identify_Macros
+	A1 &head                    ; mov eax, [head]
+	E8 %Line_Macro              ; call Line_Macro
+	A1 &head                    ; mov eax, [head]
+	E8 %Process_String          ; call Process_String
+	A1 &head                    ; mov eax, [head]
+	E8 %Eval_Immediates         ; call Eval_Immediates
+	A1 &head                    ; mov eax, [head]
+	E8 %Preserve_Other          ; call Preserve_Other
+	A1 &head                    ; mov eax, [head]
+	E8 %Print_Hex               ; call Print_Hex
+
+:_start.done
+	FF 35 &out_handle           ; push dword [out_handle]     # push out_handle
+	FF 15 &fn_close             ; call [fn_close]
+	FF 35 &in_handle            ; push dword [in_handle]      # push in_handle
+	FF 15 &fn_close             ; call [fn_close]
+	6A 00                       ; push 0x0                    # ExitStatus = 0
+	6A FF                       ; push -0x1                   # ProcessHandle = NtCurrentProcess pseudo-handle
+	FF 15 &fn_exit              ; call [fn_exit]
+
+## ==== .data ====
+
+# Export names, matched by resolve_export.
+:name_NtCreateFile
+4E 74 43 72 65 61 74 65 46 69 6C 65 00 # name_NtCreateFile = "NtCreateFile"
+
+:name_NtReadFile
+4E 74 52 65 61 64 46 69 6C 65 00 # name_NtReadFile = "NtReadFile"
+
+:name_NtWriteFile
+4E 74 57 72 69 74 65 46 69 6C 65 00 # name_NtWriteFile = "NtWriteFile"
+
+:name_NtClose
+4E 74 43 6C 6F 73 65 00         # name_NtClose = "NtClose"
+
+:name_NtTerminateProcess
+4E 74 54 65 72 6D 69 6E 61 74 65 50 72 6F 63 65 73 73 00 # name_NtTerminateProcess = "NtTerminateProcess"
+
+:name_RtlDosPath
+52 74 6C 44 6F 73 50 61 74 68 4E 61 6D 65 54 6F 4E 74 50 61 74 68 4E 61 6D 65 5F 55 00 # name_RtlDosPath = "RtlDosPathNameToNtPathName_U"
+
+:DEFINE_str
+44 45 46 49 4E 45 00            # DEFINE_str = "DEFINE"
+
+# The character sets the tokenizer splits on.
+:terminators
+0A 0D 09 20 00                  # terminators = "\n\r\t "
+
+:comments
+3B 23 00                        # comments = ";#"
+
+:string_char
+22 27 00                        # string_char = "\"'"
+
+# Resolved routine addresses.
+:fn_create
+00 00 00 00                     # fn_create: resolved NtCreateFile
+
+:fn_read
+00 00 00 00                     # fn_read: resolved NtReadFile
+
+:fn_write
+00 00 00 00                     # fn_write: resolved NtWriteFile
+
+:fn_close
+00 00 00 00                     # fn_close: resolved NtClose
+
+:fn_exit
+00 00 00 00                     # fn_exit: resolved NtTerminateProcess
+
+:fn_rtlpath
+00 00 00 00                     # fn_rtlpath: resolved RtlDosPathNameToNtPathName_U
+
+# Arguments that must survive the RtlDosPathNameToNtPathName_U call.
+:g_access
+00 00 00 00                     # g_access: DesiredAccess held across the RtlDosPathNameToNtPathName_U call
+
+:g_disp
+00 00 00 00                     # g_disp: CreateDisposition, same
+
+:g_handle
+00 00 00 00                     # g_handle: NtCreateFile's out-parameter
+
+# OBJECT_ATTRIBUTES, one label per field so hex2 can address each of them.
+:oa
+00 00 00 00                     # oa: OBJECT_ATTRIBUTES.Length
+
+:oa_root
+00 00 00 00                     # oa_root: .RootDirectory
+
+:oa_name
+00 00 00 00                     # oa_name: .ObjectName
+
+:oa_attr
+00 00 00 00                     # oa_attr: .Attributes
+
+:oa_sd
+00 00 00 00                     # oa_sd: .SecurityDescriptor
+
+:oa_sqos
+00 00 00 00                     # oa_sqos: .SecurityQualityOfService
+
+:nt_path
+00 00 00 00 00 00 00 00         # nt_path: UNICODE_STRING filled by RtlDosPathNameToNtPathName_U
+
+# IO_STATUS_BLOCK.
+:iosb
+00 00 00 00                     # iosb: IO_STATUS_BLOCK.Status
+
+:iosb_info
+00 00 00 00                     # iosb_info: IO_STATUS_BLOCK.Information
+
+# The two open files and the argv pointers they came from.
+:in_handle
+00 00 00 00                     # in_handle: argv[1]
+
+:out_handle
+00 00 00 00                     # out_handle: argv[2]
+
+:arg_in
+00 00 00 00                     # arg_in: PWSTR argv[1]
+
+:arg_out
+00 00 00 00                     # arg_out: PWSTR argv[2]
+
+# Allocator and tokenizer state.
+:malloc_ptr
+00 00 00 00                     # malloc_ptr: the bump allocator's cursor
+
+:head
+00 00 00 00                     # head: the token list
+
+:eof_flag
+00 00 00 00                     # eof_flag: set once the input is exhausted
+
+:tok_c
+00 00 00 00                     # tok_c: the character Tokenize_Line is looking at
+
+:tok_p
+00 00 00 00                     # tok_p: the token being filled in
+
+# One-byte read and write buffers.
+:inbuf
+00                              # inbuf: one-byte read buffer
+
+:outbuf
+00                              # outbuf: one-byte write buffer
+
+# SizeOfCode and SizeOfRawData are measured to here.
+:PE_end
+
+## ==== reserved, zero-filled by the loader (past the end of the file) ====
+:arena  # 0 bytes  -- everything malloc hands out, zero-filled by the loader
