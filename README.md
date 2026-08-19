@@ -22,6 +22,7 @@ reading, from the bottom up.
     x86/PE32-i386.hex2                        the PE32 header, in hex2
     x86/ntdll-i386.hex2                       the shared Windows plumbing, in hex2
     x86/M0_x86.hex2                           M0, written in hex2
+    x86/cc_x86.M1                             cc_x86, written in M1
 
 | link | adds |
 | ---- | ---- |
@@ -30,6 +31,7 @@ reading, from the bottom up.
 | hex2 | labels with names, pointers with widths: a linker |
 | catm | concatenating files, so a header can be put in front of a program |
 | M0   | macros, strings and immediates: the first real language |
+| cc_x86 | a subset of C, large enough to compile M2-Planet |
 
 ## Building
 
@@ -83,6 +85,23 @@ with:
 Each generator assembles its own output and compares it against the binary it
 describes, so a source that has drifted from its binary fails there rather than
 later.
+
+`x86/cc_x86.M1` is the exception, because it is readable assembly rather than
+hex and because the compiler in it is upstream's and is not being ported. It is
+derived from upstream's `x86/cc_x86.M1` by `x86/Development/port_cc_x86.py`,
+which is written as a list of exact before-and-after passages: every one of them
+must match, so if upstream moves under any of the places this port replaces, the
+script fails rather than quietly producing something nobody has read. Point
+`CC_X86_UPSTREAM` at an upstream checkout's `x86/cc_x86.M1` to re-derive it:
+
+    CC_X86_UPSTREAM=../stage0-posix/x86/cc_x86.M1 x86/Development/regenerate.sh
+
+The whole of the port is `_start`, `malloc`, `fgetc`, `fputc`, `Exit_Failure`
+and the name of the label that ends the image. Feed the same C to upstream's
+`cc_x86` and to this one and the two outputs differ in exactly one line, the
+`:ELF_end` that becomes `:PE_end`. The binaries share nothing -- different
+format, different entry, different plumbing -- but the compiler between them is
+demonstrably the same compiler.
 
 ## Licence
 

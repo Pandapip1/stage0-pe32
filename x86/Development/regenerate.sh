@@ -16,3 +16,13 @@ python3 gen_ntdll.py  /tmp/ntdll.exe ../ntdll-i386.hex2
 python3 gen_m0.py     /tmp/M0.exe   ../M0_x86.hex2 ../ntdll-i386.hex2
 cmp /tmp/hex0.exe ../../bootstrap-seeds/PE32/i386/hex0-seed.exe \
   && echo "seed still reproduces"
+
+# cc_x86.M1 is readable assembly rather than hex, so it is not written from
+# scratch here: port_cc_x86.py patches upstream's copy.  Point CC_X86_UPSTREAM
+# at a stage0-posix checkout's x86/cc_x86.M1 to re-derive it and see whether
+# upstream has moved under any of the passages the port replaces.
+if [ -n "${CC_X86_UPSTREAM:-}" ]; then
+  python3 port_cc_x86.py "$CC_X86_UPSTREAM" ../cc_x86.M1
+else
+  echo "cc_x86: not re-derived (set CC_X86_UPSTREAM to upstream's x86/cc_x86.M1)"
+fi

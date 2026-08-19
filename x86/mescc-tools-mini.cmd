@@ -31,7 +31,13 @@ rem the header stub, the shared Windows plumbing, and the program itself.
 "%ART%\catm.exe" "%ART%\M0.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%HERE%M0_x86.hex2" || goto :fail
 "%ART%\hex2.exe" "%ART%\M0.hex2" "%ART%\M0.exe" || goto :fail
 
-echo Built: hex0 hex1 hex2 catm M0
+rem Phase-4  cc_x86, a compiler for the subset of C that M2-Planet is written in.
+rem This is the last link written by hand; everything above it is compiled.
+"%ART%\M0.exe" "%HERE%cc_x86.M1" "%ART%\cc_x86-0.hex2" || goto :fail
+"%ART%\catm.exe" "%ART%\cc_x86.hex2" "%HERE%PE32-i386.hex2" "%HERE%ntdll-i386.hex2" "%ART%\cc_x86-0.hex2" || goto :fail
+"%ART%\hex2.exe" "%ART%\cc_x86.hex2" "%ART%\cc_x86.exe" || goto :fail
+
+echo Built: hex0 hex1 hex2 catm M0 cc_x86
 exit /b 0
 
 :fail
