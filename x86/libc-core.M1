@@ -149,10 +149,20 @@ DEFINE test_ebx,ebx 85DB
 # resolved, the C library set up -- so the stack below is finished with and the
 # parent may have it.  Say so, and spin: the parent suspends this thread, copies
 # itself over this process, and points the thread at where it wants it.  Nothing
-# here ever leaves this loop under its own power.
+# here ever leaves this loop under its own power, and it sleeps rather than
+# spins: a tight loop would cost a whole core for as long as it waited, and if
+# the parent ever died between starting this child and redirecting it, that
+# core would be gone until someone noticed.
 :_start_park
 	mov_eax, %1
 	mov_[DWORD],eax &__fork_parked
+	mov_eax, %0xFFFFD8F0                        ; -10000 as a LARGE_INTEGER: a
+	mov_[DWORD],eax &__fork_delay               ; relative interval, 100ns units,
+	mov_eax, %0xFFFFFFFF                        ; so one millisecond
+	mov_[DWORD],eax &__fork_delay_hi
+	push_DWORD &__fork_delay                    ; DelayInterval
+	push_byte !0                                ; Alertable = FALSE
+	call_[DWORD] &fn_delay
 	jmp %_start_park
 
 :_start_main
@@ -619,6 +629,14 @@ DEFINE test_ebx,ebx 85DB
 	NULL
 
 :__fork_parked
+	NULL
+
+# The interval _start_park sleeps for, rebuilt each turn of the loop because
+# NtDelayExecution is entitled to write to what it is handed.
+:__fork_delay
+	NULL
+
+:__fork_delay_hi
 	NULL
 
 :__fork_flagaddr

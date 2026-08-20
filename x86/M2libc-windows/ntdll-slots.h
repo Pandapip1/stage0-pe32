@@ -43,5 +43,6 @@
 #define NT_WRITEVM     26  /* NtWriteVirtualMemory: fork: copy this process's memory into that child */
 #define NT_READVM      27  /* NtReadVirtualMemory: fork: watch for the child to say it has parked */
 #define NT_SUSPEND     28  /* NtSuspendThread: fork: stop that child before overwriting it */
+#define NT_DELAY       29  /* NtDelayExecution: fork: so a parked child costs no CPU while it waits */
 
 #endif

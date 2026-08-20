@@ -1082,6 +1082,7 @@ int fork()
 	int (*NtResumeThread)(int, int);
 	int (*NtSuspendThread)(int, int);
 	int (*NtTerminateProcess)(int, int);
+	int (*NtAllocateVirtualMemory)(int, int, int, int, int, int);
 	char* path;
 	char** argv;
 	int* info;
@@ -1090,6 +1091,8 @@ int fork()
 	int* one;
 	int* seen;
 	int* got;
+	int* base;
+	int* size;
 	int ctx_raw;
 	int stack_low;
 	int stack_high;
@@ -1212,6 +1215,32 @@ int fork()
 	 * nothing in it that differs between two runs of one program anyway. */
 	heap_top = brk(0);
 	rc = __fork_write(child, 0x401000, 0x401000, heap_top - 0x401000);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* The child has barely touched its own stack: it started, ran its loader
+	 * init and its startup, and parked, all within a page or two of the top.
+	 * The rest of the range about to be written is reserved but not
+	 * committed there, and a write to a page that is only reserved answers
+	 * STATUS_PARTIAL_COPY and takes the fork down with it.  So commit the
+	 * whole range in the child first -- committing what is already committed
+	 * is not an error -- and only then copy.
+	 *
+	 * This is what made fork fail from any depth: a parent that had recursed
+	 * far enough to grow its own stack had more committed than the child
+	 * did, and the difference was exactly the part that could not be
+	 * written.  Shallow callers happened to fit and so happened to work. */
+	base = calloc(1, 4);
+	size = calloc(1, 4);
+	base[0] = stack_low;
+	size[0] = stack_len;
+	NtAllocateVirtualMemory = __ntdll(NT_ALLOC);
+	/* forwards: NtAllocateVirtualMemory(child, base, 0, size, MEM_COMMIT,
+	 *                                   PAGE_READWRITE) */
+	rc = NtAllocateVirtualMemory(4, 0x1000, size, 0, base, child);
 	if(0 != rc)
 	{
 		NtTerminateProcess(1, child);

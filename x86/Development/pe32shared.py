@@ -63,6 +63,7 @@ NTDLL = [
     ("fn_writevm",    "NtWriteVirtualMemory",         "fork: copy this process's memory into that child"),
     ("fn_readvm",     "NtReadVirtualMemory",          "fork: watch for the child to say it has parked"),
     ("fn_suspend",    "NtSuspendThread",              "fork: stop that child before overwriting it"),
+    ("fn_delay",      "NtDelayExecution",             "fork: so a parked child costs no CPU while it waits"),
 ]
 
 def emit_shared(a):

@@ -429,6 +429,10 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_suspend              ; mov [fn_suspend], eax
+	68 &name_NtDelayExecution   ; push name_NtDelayExecution
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_delay                ; mov [fn_delay], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -550,6 +554,9 @@
 :name_NtSuspendThread
 4E 74 53 75 73 70 65 6E 64 54 68 72 65 61 64 00 # name_NtSuspendThread = "NtSuspendThread"
 
+:name_NtDelayExecution
+4E 74 44 65 6C 61 79 45 78 65 63 75 74 69 6F 6E 00 # name_NtDelayExecution = "NtDelayExecution"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
@@ -639,6 +646,9 @@
 
 :fn_suspend
 00 00 00 00                     # fn_suspend: slot 28, resolved NtSuspendThread -- fork: stop that child before overwriting it
+
+:fn_delay
+00 00 00 00                     # fn_delay: slot 29, resolved NtDelayExecution -- fork: so a parked child costs no CPU while it waits
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access
