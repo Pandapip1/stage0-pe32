@@ -247,16 +247,47 @@ Loader init is the wrong thing for a fork's child to run at all, and there is a
 flag for that -- `THREAD_CREATE_FLAGS_SKIP_LOADER_INIT` -- which
 `NtCreateUserProcess` will not take, answering `STATUS_INVALID_PARAMETER`;
 that is what "NtCreateThreadEx only" in the public headers means.
-`NtCreateThreadEx` does take it, and it works: on a clone that already has a
-thread it returns `STATUS_SUCCESS`. The older claim that it always answers
+`NtCreateThreadEx` does take it, and against a clone that already has a thread
+it returns `STATUS_SUCCESS`. The older claim that it always answers
 `STATUS_PROCESS_IS_TERMINATING` holds only for the thread-less clones
-`NtCreateProcessEx` and `NtCreateProcess` make. Started that way, at an entry
-point in this image and on a stack of its own, the child does reach this
-program's own code -- the access violation moves out of `ntdll` and into it,
-landing on `mov eax, fs:0x30`, the first instruction of `__stdhandle`.
+`NtCreateProcessEx` and `NtCreateProcess` make.
 
-That is where it stops for now, because both obvious explanations are measured
-to be false: the thread has a real TEB -- `NtQueryInformationThread` gives its
+That road is closed anyway, for a reason that has nothing to do with cloning:
+**`SKIP_LOADER_INIT` cannot be used by a 32-bit process on a 64-bit Windows at
+all.** Make such a thread in an ordinary process -- no clone anywhere near it --
+point it at a function whose first act is one system call, and the process dies
+of `STATUS_ACCESS_VIOLATION` at `ntdll+0x98800`, which is
+`jmp dword ptr [Wow64Transition]`.
+
+Why it dies there is the reason it cannot be worked around. Every 32-bit system
+call is `mov eax,<number>; mov edx,[Wow64Transition]; call edx`, and what that
+reaches is seven bytes in `wow64cpu.dll`:
+
+    jmp  far 0x33:<next>          ; put the CPU in 64-bit mode
+    jmp  qword ptr [r15+0xf8]     ; and dispatch through r15
+
+The stub never loads `r15`. It is a register the 64-bit dispatch loop leaves
+live when it hands control down to 32-bit code -- `BTCpuSimulate` sets `r12`
+from `gs:0x30`, the 64-bit TEB, `r13` from the thread's WOW64 CPU area at
+`TEB+0x1488`, and `r15` to wow64cpu's dispatch table, and then runs 32-bit code
+with those still in registers. A thread enters that loop as part of its
+startup, which is exactly what `SKIP_LOADER_INIT` skips, so its first system
+call far-jumps into 64-bit mode with `r15` holding whatever was there and
+dereferences it. The fault is reported against the last 32-bit instruction,
+which is why the event log points at `ntdll` rather than at `wow64cpu`.
+
+There is nothing to poke: `r15` is live register state, not memory. And the
+whole problem is a 32-bit-on-64-bit one -- a native x86_64 program makes system
+calls with the `syscall` instruction and has no dispatch loop to be thrown out
+of, so this particular objection would not arise in an x86_64 port. It is not a
+missing page either: the pointer holds the same value in the clone as in the
+parent, the code it points at reads in both, and `NtQueryVirtualMemory` reports
+the same `State`, the same `Protect` (`PAGE_EXECUTE_READ`) and the same `Type`.
+
+So the child has to run loader init, and with the lock cleared it does, and
+dies inside it at `mov eax, fs:0x18`. That is the one thing left.
+
+It stops there because both obvious explanations are measured to be false: the thread has a real TEB -- `NtQueryInformationThread` gives its
 address, the parent can read it, and the `Self` pointer at `TEB+0x18` matches
 -- and its `FS` is the same `0x53` every thread in the parent runs with.
 Telling the difference needs the faulting data address from an exception

@@ -488,18 +488,54 @@ int execve(char* file_name, char** argv, char** envp)
  *   pass it anyway gets STATUS_INVALID_PARAMETER, which is what the note in
  *   the public headers saying "NtCreateThreadEx only" means.
  *
- *   NtCreateThreadEx will take it, and it works here: on a clone that already
- *   has a thread, NtCreateThreadEx with SKIP_LOADER_INIT returns
- *   STATUS_SUCCESS.  The earlier claim that it always answers
- *   STATUS_PROCESS_IS_TERMINATING is true only of the thread-less clones
- *   NtCreateProcessEx and NtCreateProcess make; it is not true here.  Started
- *   that way, at an entry point in this image and on a stack of its own, the
- *   child does reach this program's own code -- the access violation moves
- *   out of ntdll and into it.
+ *   NtCreateThreadEx will take it, and against a clone that already has a
+ *   thread it returns STATUS_SUCCESS.  The earlier claim that it always
+ *   answers STATUS_PROCESS_IS_TERMINATING is true only of the thread-less
+ *   clones NtCreateProcessEx and NtCreateProcess make; it is not true here.
  *
- *   And there it dies at `mov eax, fs:0x30', the first instruction of
- *   __stdhandle.  That is where this stops for now, because the obvious
- *   explanations are both measured to be false: the thread has a real TEB
+ *   That road is closed all the same, and closed for a reason that has
+ *   nothing to do with cloning: SKIP_LOADER_INIT cannot be used by a 32-bit
+ *   process on a 64-bit Windows at all.  Make such a thread in an ordinary
+ *   process -- no clone anywhere near it, every scrap of state known good --
+ *   point it at a function whose first act is one system call, and the
+ *   process dies of STATUS_ACCESS_VIOLATION at ntdll+0x98800, which is
+ *   `jmp dword ptr [Wow64Transition]'.  Measured directly, because it is much
+ *   easier to believe of a clone than of a process that was never cloned.
+ *
+ *   Why it dies there is worth writing down, because it is the reason this
+ *   cannot be worked around.  Every 32-bit system call is `mov eax,<number>;
+ *   mov edx,[Wow64Transition]; call edx', and what that reaches is seven
+ *   bytes in wow64cpu.dll:
+ *
+ *       jmp  far 0x33:<next>          ; put the CPU in 64-bit mode
+ *       jmp  qword ptr [r15+0xf8]     ; and dispatch through r15
+ *
+ *   The stub never loads r15.  It is a register the 64-bit dispatch loop
+ *   leaves live when it hands control down to 32-bit code -- BTCpuSimulate
+ *   sets r12 from gs:0x30, the 64-bit TEB, r13 from the thread's WOW64 CPU
+ *   area at TEB+0x1488, and r15 to wow64cpu's dispatch table, and then runs
+ *   the 32-bit code with those still in the registers.  A thread enters that
+ *   loop as part of its startup, which is precisely what SKIP_LOADER_INIT
+ *   skips.  So the first system call from such a thread makes the far jump
+ *   with r15 holding whatever was there, and dereferences it.  The fault is
+ *   reported against the last 32-bit instruction, which is why the event log
+ *   points at ntdll rather than at wow64cpu.
+ *
+ *   There is nothing to poke: r15 is live register state, not memory.  And
+ *   the whole problem is a 32-bit-on-64-bit one -- a native x86_64 program
+ *   makes system calls with the syscall instruction and has no dispatch loop
+ *   to be thrown out of, so this particular objection would not arise in an
+ *   x86_64 port of this bootstrap.
+ *
+ *   It is not a missing page: the Wow64Transition pointer holds the same
+ *   value in the clone as here, the code it points at can be read in both,
+ *   and NtQueryVirtualMemory gives both the same State, the same Protect --
+ *   PAGE_EXECUTE_READ -- and the same Type.
+ *
+ *   So the child has to run loader init, and with the lock cleared it does
+ *   run it, and dies inside it at `mov eax, fs:0x18'.  That is the one thing
+ *   left, and it is where this stops.  Both obvious explanations for it are
+ *   measured to be false: a thread in the clone has a real TEB
  *   (NtQueryInformationThread gives its address, it can be read from the
  *   parent, and the Self pointer at TEB+0x18 matches it), and its FS is the
  *   same 0x53 every thread in the parent runs with.  Telling the difference
