@@ -215,24 +215,56 @@ It does not work, by any of the four routes in, all measured on Windows 11
 
 | | |
 | --- | --- |
-| `RtlCloneUserProcess` | clones, and the child never comes back |
+| `RtlCloneUserProcess` | clones, and the child deadlocks or faults in loader init |
 | `NtCreateProcessEx` | clones, and the clone cannot be given a thread |
 | `NtCreateProcess` | the same, by the older name |
 | `NtCreateUserProcess` | the supported one, which does not clone at all |
 
 The parent gets success and a genuine cloned process -- two in `tasklist`, the
 child reported `STATUS_PENDING` -- and the child's one thread, which is not
-suspended, sits in `Wait` and never reaches the first statement after the call.
-Every flag combination behaves the same, and it is neither this port's doing
-nor WOW64's: the identical call from 64-bit and from 32-bit PowerShell clones
-the process and never returns in the child either.
+suspended, never reaches the first statement after the call. It is neither this
+port's doing nor WOW64's: the identical call from 64-bit and from 32-bit
+PowerShell clones the process and never returns in the child either.
 
-Doing it by hand fails one step earlier. `NtCreateProcessEx` and
-`NtCreateProcess`, each given this process as the parent and no section handle,
-both clone and hand back a process handle -- and `NtCreateThreadEx` then
-refuses to put a thread in either, with `STATUS_PROCESS_IS_TERMINATING`,
-whatever thread flags are asked for, `SKIP_LOADER_INIT` included. A clone with
-no thread is torn down before it can be given one.
+Where it stops depends on the flags, and an earlier version of this section
+saying otherwise was wrong. Without `NO_SYNCHRONIZE` the child **deadlocks**;
+with it the child **runs and dies** of an access violation. The deadlock is an
+inherited lock and is now understood. `RtlCloneUserProcess` holds the SRW lock
+at `ntdll+0x12d7a4` exclusively across the clone, so the child's address space
+is a snapshot in which it is held; the child's new thread then runs
+`LdrInitializeThunk` like any new thread, loader init wants that same lock
+shared, and it waits in `NtWaitForAlertByThreadId` to be alerted by a thread
+that does not exist on this side of the fork. Read out of the suspended child:
+EIP in `ZwWaitForAlertByThreadId`, the lock's address twice on the stack, and
+`LdrInitializeThunk` further up it.
+
+Zeroing that lock in the child before letting it go removes the deadlock, and
+the child then gets exactly as far as the `NO_SYNCHRONIZE` one: an access
+violation at `ntdll+0x8c5d6`, which is `mov eax, fs:0x18`, inside a function
+whose only caller in the whole DLL is `LdrInitializeThunk`.
+
+Loader init is the wrong thing for a fork's child to run at all, and there is a
+flag for that -- `THREAD_CREATE_FLAGS_SKIP_LOADER_INIT` -- which
+`NtCreateUserProcess` will not take, answering `STATUS_INVALID_PARAMETER`;
+that is what "NtCreateThreadEx only" in the public headers means.
+`NtCreateThreadEx` does take it, and it works: on a clone that already has a
+thread it returns `STATUS_SUCCESS`. The older claim that it always answers
+`STATUS_PROCESS_IS_TERMINATING` holds only for the thread-less clones
+`NtCreateProcessEx` and `NtCreateProcess` make. Started that way, at an entry
+point in this image and on a stack of its own, the child does reach this
+program's own code -- the access violation moves out of `ntdll` and into it,
+landing on `mov eax, fs:0x30`, the first instruction of `__stdhandle`.
+
+That is where it stops for now, because both obvious explanations are measured
+to be false: the thread has a real TEB -- `NtQueryInformationThread` gives its
+address, the parent can read it, and the `Self` pointer at `TEB+0x18` matches
+-- and its `FS` is the same `0x53` every thread in the parent runs with.
+Telling the difference needs the faulting data address from an exception
+record, which needs a debugger port rather than the event log's module offsets.
+Worth knowing for whoever picks this up: the supported consumer of
+`RtlCloneUserProcess` is process reflection, whose child is a passive snapshot
+that is read and discarded rather than run, and nothing measured here rules out
+a clone being unable to run ordinary code at all.
 
 `__clone_process` keeps the call and the measurements; `fork` returns -1,
 because a fork whose child never runs would hang the first caller to wait for

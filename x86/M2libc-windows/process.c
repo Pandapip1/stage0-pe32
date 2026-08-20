@@ -456,25 +456,65 @@ int execve(char* file_name, char** argv, char** envp)
  *   STATUS_PENDING, so it exists and has not exited.
  *
  *   Its one thread is not suspended: NtResumeThread returns a previous
- *   suspend count of 0.  It sits in Wait, and never reaches the first
- *   statement after the call -- checked by having that statement be a single
- *   fopen of a file whose presence is the whole test.
+ *   suspend count of 0.  It never reaches the first statement after the call
+ *   -- checked by having that statement be a single fopen of a file whose
+ *   presence is the whole test.
  *
- *   Every flag combination behaves the same: 0, CREATE_SUSPENDED,
- *   INHERIT_HANDLES, both, NO_SYNCHRONIZE, and NO_SYNCHRONIZE with
- *   INHERIT_HANDLES.
+ *   Where it stops is not the same for every flag combination, and an earlier
+ *   version of this note saying it was is simply wrong.  With 0,
+ *   CREATE_SUSPENDED, INHERIT_HANDLES or both, the child deadlocks.  With
+ *   NO_SYNCHRONIZE, with or without the others, it does not deadlock: it runs
+ *   and dies of an access violation.
  *
- *   Doing it by hand does not help.  NtCreateProcessEx and NtCreateProcess,
- *   each given this process as the parent and no section handle, both clone
- *   successfully and hand back a process handle -- and NtCreateThreadEx then
- *   refuses to put a thread in either of them, with
- *   STATUS_PROCESS_IS_TERMINATING, whatever thread flags are asked for,
- *   SKIP_LOADER_INIT included.  A clone with no thread is torn down before it
- *   can be given one.
+ *   The deadlock is an inherited lock, and it is fully understood.
+ *   RtlCloneUserProcess takes the SRW lock at ntdll+0x12d7a4 exclusively
+ *   across the clone, so the child's address space is a snapshot in which
+ *   that lock is held.  The child's new thread then runs LdrInitializeThunk
+ *   like any new thread, and loader init wants the same lock shared -- ntdll
+ *   has a table lookup that does `mov edi, <that lock>; call
+ *   RtlAcquireSRWLockShared' -- so it waits in NtWaitForAlertByThreadId to be
+ *   alerted by a thread that does not exist on this side of the fork.  Read
+ *   out of the suspended child: EIP in ZwWaitForAlertByThreadId, the lock's
+ *   address twice on the stack, and LdrInitializeThunk further up it.
+ *
+ *   Zeroing that lock in the child before letting it go removes the deadlock,
+ *   and the child then gets exactly as far as the NO_SYNCHRONIZE one: an
+ *   access violation at ntdll+0x8c5d6, which is `mov eax, fs:0x18', in a
+ *   function whose only caller in the whole DLL is LdrInitializeThunk.
+ *
+ *   Loader init is the wrong thing for a fork's child to be running at all,
+ *   and there is a flag for that -- THREAD_CREATE_FLAGS_SKIP_LOADER_INIT --
+ *   which NtCreateUserProcess will not take.  Forcing RtlCloneUserProcess to
+ *   pass it anyway gets STATUS_INVALID_PARAMETER, which is what the note in
+ *   the public headers saying "NtCreateThreadEx only" means.
+ *
+ *   NtCreateThreadEx will take it, and it works here: on a clone that already
+ *   has a thread, NtCreateThreadEx with SKIP_LOADER_INIT returns
+ *   STATUS_SUCCESS.  The earlier claim that it always answers
+ *   STATUS_PROCESS_IS_TERMINATING is true only of the thread-less clones
+ *   NtCreateProcessEx and NtCreateProcess make; it is not true here.  Started
+ *   that way, at an entry point in this image and on a stack of its own, the
+ *   child does reach this program's own code -- the access violation moves
+ *   out of ntdll and into it.
+ *
+ *   And there it dies at `mov eax, fs:0x30', the first instruction of
+ *   __stdhandle.  That is where this stops for now, because the obvious
+ *   explanations are both measured to be false: the thread has a real TEB
+ *   (NtQueryInformationThread gives its address, it can be read from the
+ *   parent, and the Self pointer at TEB+0x18 matches it), and its FS is the
+ *   same 0x53 every thread in the parent runs with.  Telling the difference
+ *   needs the faulting data address out of an exception record, which needs a
+ *   debugger port rather than the event log's module offsets.
  *
  *   It is not this port's doing and not WOW64's.  The same call from 64-bit
  *   PowerShell and from 32-bit PowerShell, through P/Invoke, clones the
  *   process and never returns in the child either.
+ *
+ *   Worth knowing for whoever picks this up: the supported consumer of
+ *   RtlCloneUserProcess is process reflection, whose child is a passive
+ *   snapshot that is read and discarded rather than run.  Nothing measured
+ *   here contradicts the possibility that a clone cannot be made to run
+ *   ordinary code at all.
  *
  * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
  * which is checked rather than assumed: resolve_export returns 0 for a name
