@@ -1223,20 +1223,33 @@ int fork()
 
 	/* The child has barely touched its own stack: it started, ran its loader
 	 * init and its startup, and parked, all within a page or two of the top.
-	 * The rest of the range about to be written is reserved but not
-	 * committed there, and a write to a page that is only reserved answers
-	 * STATUS_PARTIAL_COPY and takes the fork down with it.  So commit the
-	 * whole range in the child first -- committing what is already committed
-	 * is not an error -- and only then copy.
+	 * Everything below that is reserved rather than committed there, and a
+	 * write to a page that is only reserved answers STATUS_PARTIAL_COPY --
+	 * which is what made fork fail from any depth at all.  A parent that had
+	 * recursed far enough to grow its own stack had more committed than the
+	 * child did, and the difference was exactly the part that could not be
+	 * written; shallow callers happened to fit, and so happened to work.
 	 *
-	 * This is what made fork fail from any depth: a parent that had recursed
-	 * far enough to grow its own stack had more committed than the child
-	 * did, and the difference was exactly the part that could not be
-	 * written.  Shallow callers happened to fit and so happened to work. */
+	 * Committing just the parent's committed range is not enough, though,
+	 * and the reason is the guard page.  Windows grows a stack by putting a
+	 * PAGE_GUARD page below what is committed and committing one more when
+	 * it is touched; the child's guard page sits high, where its own short
+	 * stack ended, and is inside the range being written.  Overwrite it and
+	 * the child has no guard anywhere, so the first call that reaches past
+	 * the copied region touches reserved memory and dies rather than growing
+	 * -- which is what a child that forked deep and then recursed did.
+	 *
+	 * So commit the whole reservation instead.  It is 0x200000, because that
+	 * is the SizeOfStackReserve x86/PE32-i386.hex2 writes into every image
+	 * this chain builds, and StackBase is its top.  A child then has its
+	 * whole stack already there and needs no guard page to grow into it, at
+	 * the cost of 2MB of committed memory per fork -- which is the same 2MB
+	 * the parent would have ended up committing anyway had it recursed that
+	 * far.  Committing what is already committed is not an error. */
 	base = calloc(1, 4);
 	size = calloc(1, 4);
-	base[0] = stack_low;
-	size[0] = stack_len;
+	base[0] = stack_high - 0x200000;
+	size[0] = 0x200000;
 	NtAllocateVirtualMemory = __ntdll(NT_ALLOC);
 	/* forwards: NtAllocateVirtualMemory(child, base, 0, size, MEM_COMMIT,
 	 *                                   PAGE_READWRITE) */

@@ -217,6 +217,16 @@ copying memory from one into the other needs no fixups of any kind -- a pointer
 means the same thing on both sides. A program built the ordinary way,
 relocatable and randomised, could not do this. This one can only do it.
 
+The child's whole stack reservation -- 2MB, the `SizeOfStackReserve` the header
+writes -- is committed before anything is copied into it. Committing only what
+the parent had committed is not enough, and the reason is the guard page:
+Windows grows a stack by keeping a `PAGE_GUARD` page below what is committed
+and committing one more when it is touched, and the child's guard page sits
+high, where its own short stack ended, inside the range being written. Overwrite
+it and the child has no guard anywhere, so the first call reaching past the
+copied region touches reserved memory and dies instead of growing. That is what
+a child which forked deep and then recursed did.
+
 The awkward part is that the child has its own loader init to run, on that same
 stack, before it can be trusted with anything -- so it is made to run all of its
 own startup first and then stop dead. `_start` reads one word: a flag the parent
