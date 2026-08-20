@@ -504,18 +504,41 @@ int execve(char* file_name, char** argv, char** envp)
  *   already done by whoever built this context, same as everywhere else in
  *   this note.
  *
- *   That sits in tension with "the child's new thread then runs
+ *   That sat in tension with "the child's new thread then runs
  *   LdrInitializeThunk" above, which was read off the stack of an actually
- *   resumed, actually deadlocked child, not off its context before running.
- *   Both measurements stand: the true resume point is mid-syscall-return,
- *   and yet LdrInitializeThunk is genuinely on the call stack by the time it
- *   deadlocks.  The reconciling possibility -- that a new thread's
- *   mandatory one-time pass through LdrInitializeThunk is not something
- *   the *initial context* points at, but something the kernel runs before
- *   handing that context back regardless of whether the thread is fresh or
- *   cloned -- was not confirmed by a third measurement (catching the
- *   transition itself, with a debug port, mid-flight) before this note was
- *   written.  Left as the next thing to pin down, not asserted.
+ *   resumed, actually deadlocked child rather than off its context before
+ *   running, and the tension is now settled: both readings are right, and
+ *   neither of the two guesses about which one described the entry point was.
+ *   Clone with CREATE_SUSPENDED, read the context, resume, wait, read the
+ *   context again and read the stack it deadlocked on.  Before resuming, Eip
+ *   is ZwCreateUserProcess+0xc and Esp is 0x85ffce8.  After, Eip is
+ *   ZwWaitForAlertByThreadId+0xc, and on the stack, laid out from the top
+ *   down:
+ *
+ *       0x85ffce8                the Esp the context before resuming had
+ *       0x85ffa1c..0x85ffce8     a whole 716-byte i386 CONTEXT, ContextFlags
+ *                                0x1003f, Eip ZwCreateUserProcess+0xc,
+ *                                Cs 0x23, Esp 0x85ffce8
+ *       0x85ffa10                a pointer to 0x85ffa1c
+ *       0x85ffa00                a return address in LdrInitializeThunk+0x11
+ *       0x85ff9ec                another, LdrInitializeThunk+0x70
+ *
+ *   So the thread's first 32-bit instruction is 32-bit LdrInitializeThunk,
+ *   entered with a pointer to a CONTEXT written immediately beneath the
+ *   parent's stack pointer -- 716 bytes of it, ending exactly at 0x85ffce8 --
+ *   and that CONTEXT is precisely what NtGetContextThread reported before the
+ *   thread ran.  The pre-resume context is the destination, not the entry
+ *   point: loader init runs first and is meant to continue into it when it is
+ *   done, which is the same shape as a genuinely new WOW64 thread, whose
+ *   32-bit side also begins in LdrInitializeThunk with a context to resume.
+ *   Nothing detours; the detour IS the start, and the "true" context is where
+ *   it was always going to end up.
+ *
+ *   Which is a nicer answer than either guess.  The clone is dispatched like
+ *   a brand-new thread AND it resumes from the same program counter as its
+ *   parent -- the first describes where it begins, the second where loader
+ *   init would hand it off to, and there was never a contradiction between
+ *   them.  No debug port was needed for this after all; the stack said it.
  *
  *   Zeroing that lock in the child before letting it go removes the deadlock,
  *   and the child then gets exactly as far as the NO_SYNCHRONIZE one: an
