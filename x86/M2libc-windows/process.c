@@ -533,18 +533,49 @@ int execve(char* file_name, char** argv, char** envp)
  *   PAGE_EXECUTE_READ -- and the same Type.
  *
  *   So the child has to run loader init, and with the lock cleared it does
- *   run it, and dies inside it at `mov eax, fs:0x18'.  That is the one thing
- *   left, and it is where this stops.  Both obvious explanations for it are
- *   measured to be false: a thread in the clone has a real TEB
- *   (NtQueryInformationThread gives its address, it can be read from the
- *   parent, and the Self pointer at TEB+0x18 matches it), and its FS is the
- *   same 0x53 every thread in the parent runs with.  Telling the difference
- *   needs the faulting data address out of an exception record, which needs a
- *   debugger port rather than the event log's module offsets.
+ *   run it, and dies inside it at `mov eax, fs:0x18'.  Attaching a debug port
+ *   to the clone -- NtCreateDebugObject and NtDebugActiveProcess, so that it
+ *   stops at the fault instead of dying of it -- says what that is, and it is
+ *   the end of the road:
  *
- *   It is not this port's doing and not WOW64's.  The same call from 64-bit
- *   PowerShell and from 32-bit PowerShell, through P/Invoke, clones the
- *   process and never returns in the child either.
+ *       ExceptionCode     0xc0000005
+ *       ExceptionAddress  ntdll+0x8c5d6      ; mov eax, fs:0x18
+ *       access            0                  ; a read
+ *       faulting address  0x18
+ *       SegFs             0x53
+ *       SegCs             0x23
+ *       TebBaseAddress    0x21e000
+ *
+ *   It reads fs:0x18 and faults on linear address 0x18, so the base behind FS
+ *   is zero.  Not the selector -- 0x53 is the right one -- and not the TEB,
+ *   which exists and can be read from the parent.  The descriptor that
+ *   selector names simply has no base.
+ *
+ *   Which is the same illness as the r15 one above, with the same diagnosis.
+ *   A 32-bit process on a 64-bit Windows runs inside a WOW64 layer: the kernel
+ *   programs the compatibility-mode TEB base for each thread, and the 64-bit
+ *   dispatch loop keeps r12, r13 and r15 live for it.  Both are established
+ *   when a process and its threads are made the ordinary way, and a clone is
+ *   not made the ordinary way, so neither happens.  A cloned 32-bit process
+ *   has no WOW64 state at all: every fs: access lands at its bare offset, and
+ *   every system call jumps through a register holding nothing.
+ *
+ *   Neither is memory, so neither can be poked into place from here.  A
+ *   segment base lives in a descriptor the kernel owns and no user-mode call
+ *   sets it; the SegFs in a 32-bit CONTEXT is the selector, which is already
+ *   right.  This is where fork stops on i386 Windows, and it stops for a
+ *   reason outside this program rather than inside it.
+ *
+ *   An earlier version of this note said it was "not WOW64's doing", on the
+ *   strength of the same call failing from 64-bit PowerShell too.  That was
+ *   the wrong conclusion from a true observation: the PowerShell child was
+ *   stopped by the inherited lock, which is a different failure and one that
+ *   has since been fixed here.  Being 32-bit on a 64-bit Windows is exactly
+ *   what these last two objections are.  A native x86_64 program has no WOW64
+ *   layer -- it makes system calls with the syscall instruction and reaches
+ *   its TEB through GS, whose base the kernel programs for every thread it
+ *   creates -- so the question is worth asking again, from scratch, in an
+ *   x86_64 port of this bootstrap, and only there.
  *
  *   Worth knowing for whoever picks this up: the supported consumer of
  *   RtlCloneUserProcess is process reflection, whose child is a passive

@@ -215,16 +215,17 @@ It does not work, by any of the four routes in, all measured on Windows 11
 
 | | |
 | --- | --- |
-| `RtlCloneUserProcess` | clones, and the child deadlocks or faults in loader init |
+| `RtlCloneUserProcess` | clones, and the clone has no WOW64 state to run with |
 | `NtCreateProcessEx` | clones, and the clone cannot be given a thread |
 | `NtCreateProcess` | the same, by the older name |
 | `NtCreateUserProcess` | the supported one, which does not clone at all |
 
 The parent gets success and a genuine cloned process -- two in `tasklist`, the
 child reported `STATUS_PENDING` -- and the child's one thread, which is not
-suspended, never reaches the first statement after the call. It is neither this
-port's doing nor WOW64's: the identical call from 64-bit and from 32-bit
-PowerShell clones the process and never returns in the child either.
+suspended, never reaches the first statement after the call. It is not this
+port's doing: the identical call from 64-bit and from 32-bit PowerShell clones
+the process and never returns in the child either -- though see below for what
+that observation does and does not establish.
 
 Where it stops depends on the flags, and an earlier version of this section
 saying otherwise was wrong. Without `NO_SYNCHRONIZE` the child **deadlocks**;
@@ -285,17 +286,43 @@ parent, the code it points at reads in both, and `NtQueryVirtualMemory` reports
 the same `State`, the same `Protect` (`PAGE_EXECUTE_READ`) and the same `Type`.
 
 So the child has to run loader init, and with the lock cleared it does, and
-dies inside it at `mov eax, fs:0x18`. That is the one thing left.
+dies inside it at `mov eax, fs:0x18`. Attaching a debug port to the clone --
+`NtCreateDebugObject` and `NtDebugActiveProcess`, so it stops at the fault
+instead of dying of it -- says what that is:
 
-It stops there because both obvious explanations are measured to be false: the thread has a real TEB -- `NtQueryInformationThread` gives its
-address, the parent can read it, and the `Self` pointer at `TEB+0x18` matches
--- and its `FS` is the same `0x53` every thread in the parent runs with.
-Telling the difference needs the faulting data address from an exception
-record, which needs a debugger port rather than the event log's module offsets.
-Worth knowing for whoever picks this up: the supported consumer of
-`RtlCloneUserProcess` is process reflection, whose child is a passive snapshot
-that is read and discarded rather than run, and nothing measured here rules out
-a clone being unable to run ordinary code at all.
+    ExceptionCode     0xc0000005
+    ExceptionAddress  ntdll+0x8c5d6      ; mov eax, fs:0x18
+    access            0                  ; a read
+    faulting address  0x18
+    SegFs             0x53
+    SegCs             0x23
+    TebBaseAddress    0x21e000
+
+It reads `fs:0x18` and faults on linear address `0x18`, so **the base behind FS
+is zero**. Not the selector -- `0x53` is the right one -- and not the TEB, which
+exists and can be read from the parent. The descriptor that selector names
+simply has no base.
+
+Which is the same illness as the `r15` one, with the same diagnosis. A 32-bit
+process on a 64-bit Windows runs inside a WOW64 layer: the kernel programs the
+compatibility-mode TEB base for each thread, and the 64-bit dispatch loop keeps
+`r12`, `r13` and `r15` live for it. Both are established when a process and its
+threads are made the ordinary way, and a clone is not made the ordinary way, so
+neither happens. A cloned 32-bit process has no WOW64 state at all: every `fs:`
+access lands at its bare offset, and every system call jumps through a register
+holding nothing. Neither is memory, so neither can be poked into place -- a
+segment base lives in a descriptor the kernel owns, and no user-mode call sets
+it.
+
+An earlier version of this section said it was "neither this port's doing nor
+WOW64's", on the strength of the same call failing from 64-bit PowerShell. That
+was the wrong conclusion from a true observation: the PowerShell child was
+stopped by the inherited lock, a different failure, and one since fixed here.
+Being 32-bit on a 64-bit Windows is exactly what these last two objections are.
+A native x86_64 program has no WOW64 layer -- `syscall` for system calls, and
+its TEB through `GS`, whose base the kernel programs for every thread -- so the
+question is worth asking again, from scratch, in an x86_64 port, and only
+there.
 
 `__clone_process` keeps the call and the measurements; `fork` returns -1,
 because a fork whose child never runs would hang the first caller to wait for
