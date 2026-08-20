@@ -649,6 +649,31 @@ provenance runs 32-bit code in it. Where in the 64-bit bring-up that stops is
 what anyone picking this up would have to find next, and it cannot be found from
 the 32-bit side -- the same wall the `r15` finding ends at.
 
+Which was written as an open question, and is now answered -- in the negative,
+and not for want of asking properly. **No flag makes an `NtCreateProcessEx`
+clone take a thread.** Against a real 32-bit target, every
+[`PROCESS_CREATE_FLAGS_`](https://github.com/winsiderss/phnt/blob/master/ntpsapi.h)
+value that could mean anything to a clone was tried -- `NONE`,
+`INHERIT_HANDLES` (`4`), `INHERIT_FROM_PARENT` (`0x100`), both together, and
+`CREATE_SUSPENDED` (`0x200`) -- and all five clone successfully, each answering
+[`NtQueryInformationProcess`](https://ntdoc.m417z.com/ntqueryinformationprocess)`(ProcessBasicInformation)`
+with `ExitStatus` `STILL_ACTIVE`, so each is a live process by every measure
+available from outside it. `CLONE_MINIMAL` (`0x2000`) is refused outright with
+`STATUS_INVALID_PARAMETER`, so it is not a clone flag for this at all. Into
+every one of the five, `NtCreateThreadEx` answers
+`STATUS_PROCESS_IS_TERMINATING` -- with `CreateFlags` `0` and with
+`CREATE_SUSPENDED` alike, from a 32-bit caller and from a 64-bit one: the same
+`0xc000010a` in all ten attempts.
+
+Published research says why, and says it is deliberate: the kernel marks a
+threadless clone as awaiting deletion, so thread creation is refused the way it
+would be for a process already on its way out -- and has been since Windows 8.1,
+before which such clones *could* be given threads
+([Hunt & Hackett, "The Definitive Guide To Process Cloning on
+Windows"](https://www.huntandhackett.com/blog/the-definitive-guide-to-process-cloning-on-windows)).
+So this is not a gap in what this port knows about the call. It is the call not
+being for this.
+
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
 user mode: a segment base lives in a descriptor the kernel owns, and the `SegFs`
