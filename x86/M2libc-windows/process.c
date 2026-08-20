@@ -551,27 +551,49 @@ int execve(char* file_name, char** argv, char** envp)
  *   which exists and can be read from the parent.  The descriptor that
  *   selector names simply has no base.
  *
- *   Which is the same illness as the r15 one above, with the same diagnosis.
- *   A 32-bit process on a 64-bit Windows runs inside a WOW64 layer: the kernel
- *   programs the compatibility-mode TEB base for each thread, and the 64-bit
- *   dispatch loop keeps r12, r13 and r15 live for it.  Both are established
- *   when a process and its threads are made the ordinary way, and a clone is
- *   not made the ordinary way, so neither happens.  A cloned 32-bit process
- *   has no WOW64 state at all: every fs: access lands at its bare offset, and
- *   every system call jumps through a register holding nothing.
+ *   Which looks like the same illness as the r15 one above.  A 32-bit process
+ *   on a 64-bit Windows runs inside a WOW64 layer: the kernel programs the
+ *   compatibility-mode TEB base for each thread, and the 64-bit dispatch loop
+ *   keeps r12, r13 and r15 live for it.  Both are established when a process
+ *   and its threads are made the ordinary way, and a clone is not made the
+ *   ordinary way.
  *
- *   Neither is memory, so neither can be poked into place from here.  A
- *   segment base lives in a descriptor the kernel owns and no user-mode call
- *   sets it; the SegFs in a 32-bit CONTEXT is the selector, which is already
- *   right.  This is where fork stops on i386 Windows, and it stops for a
- *   reason outside this program rather than inside it.
+ *   That is as far as the evidence goes, and it is worth being careful about
+ *   how far that is.  What is measured is that this clone's child has an FS
+ *   with no base.  What is NOT established is the tempting generalisation --
+ *   that a cloned 32-bit process can never have WOW64 state -- because
+ *   something in ntdll says otherwise, loudly.  RtlCreateProcessReflection,
+ *   the one caller RtlCloneUserProcess has in the whole 32-bit ntdll, does
+ *   this in its child on getting STATUS_PROCESS_CLONED back:
+ *
+ *       ba979:  mov eax, fs:0x30      ; reads FS straight away
+ *       ba9c9:  call esi              ; then calls a caller's start routine
+ *
+ *   So Windows expects a clone's child to have a working FS and to run
+ *   ordinary code.  Either reflection is broken here for every 32-bit process
+ *   on the machine, or reflection does something this code does not and the
+ *   direct use of RtlCloneUserProcess is what is wrong.  Trying to settle it
+ *   did not settle it: called on a spawned copy of this program, both with a
+ *   start routine and with none at all -- the plain passive snapshot that is
+ *   what reflection is actually for -- RtlCreateProcessReflection does not
+ *   return, and the calling process disappears without so much as a fault
+ *   record.  That is not understood either, and a conclusion built on top of
+ *   it would not be worth having.
+ *
+ *   So: fork stops here, at an FS with no base, for a reason not yet pinned
+ *   on either Windows or this code.  Whichever it is, nothing in reach fixes
+ *   it from user mode -- a segment base lives in a descriptor the kernel owns,
+ *   and the SegFs in a 32-bit CONTEXT is the selector, which is already right.
+ *
+ *   The r15 finding above does not depend on any of this.  That one was
+ *   measured with no clone anywhere near it, and it stands on its own.
  *
  *   An earlier version of this note said it was "not WOW64's doing", on the
  *   strength of the same call failing from 64-bit PowerShell too.  That was
  *   the wrong conclusion from a true observation: the PowerShell child was
  *   stopped by the inherited lock, which is a different failure and one that
- *   has since been fixed here.  Being 32-bit on a 64-bit Windows is exactly
- *   what these last two objections are.  A native x86_64 program has no WOW64
+ *   has since been fixed here.  Being 32-bit on a 64-bit Windows is at least
+ *   what the r15 objection is.  A native x86_64 program has no WOW64
  *   layer -- it makes system calls with the syscall instruction and reaches
  *   its TEB through GS, whose base the kernel programs for every thread it
  *   creates -- so the question is worth asking again, from scratch, in an
