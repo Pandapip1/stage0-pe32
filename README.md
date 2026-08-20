@@ -244,6 +244,39 @@ that does not exist on this side of the fork. Read out of the suspended child:
 EIP in `ZwWaitForAlertByThreadId`, the lock's address twice on the stack, and
 `LdrInitializeThunk` further up it.
 
+That "like any new thread" is worth checking rather than assuming, since the
+clone's own thread was a real, running thread before the clone -- it had a
+working FS base once, or it could not have gotten anywhere, so something
+about the clone loses what it already had. Whether the clone is dispatched
+exactly like a brand-new thread (EIP set to 32-bit `LdrInitializeThunk` from
+the start, the same place a genuinely new WOW64 thread's native bring-up
+hands off to) or instead resumes wherever the parent was -- inside
+`RtlCloneUserProcess` itself, the way POSIX `fork` resumes both sides from
+the same program counter -- is answerable without running anything: clone
+with `CREATE_SUSPENDED`, never resume, and read `NtGetContextThread` before
+the thread has executed a single instruction. Measured: `Eip` is
+`ZwCreateUserProcess+0xc`, `Cs` is `0x23`. Not `LdrInitializeThunk`.
+`ZwCreateUserProcess+0xc` is inside that syscall's own stub, right where `mov
+eax,<number>; mov edx,[Wow64Transition]; call edx` returns -- so the clone's
+saved context is not "start a new thread", it is "come back from this same
+system call", exactly the way a POSIX fork's child continues from the same
+program counter as its parent. `Cs` already being `0x23` says the mode
+switch back to 32-bit was already done by whoever built this context, same
+as everywhere else in this section.
+
+That sits in tension with "the child's new thread then runs
+`LdrInitializeThunk`" above, which was read off the stack of an actually
+resumed, actually deadlocked child, not off its context before running. Both
+measurements stand: the true resume point is mid-syscall-return, and yet
+`LdrInitializeThunk` is genuinely on the call stack by the time it
+deadlocks. The reconciling possibility -- that a new thread's mandatory
+one-time pass through `LdrInitializeThunk` is not something the *initial
+context* points at, but something the kernel runs before handing that
+context back regardless of whether the thread is fresh or cloned -- was not
+confirmed by a third measurement (catching the transition itself, with a
+debug port, mid-flight) before this was written. Left as the next thing to
+pin down, not asserted.
+
 Zeroing that lock in the child before letting it go removes the deadlock, and
 the child then gets exactly as far as the `NO_SYNCHRONIZE` one: an access
 violation at `ntdll+0x8c5d6`, which is `mov eax, fs:0x18`, inside a function
