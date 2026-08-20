@@ -991,14 +991,15 @@ int __fork_write(int proc, int dst, int src, int len)
 	return rc;
 }
 
-/* One word out of another process. */
-int __fork_peek(int proc, int addr, int* out)
+/* One word out of another process.  The caller passes the scratch for the
+ * count as well as the buffer, because the one caller reads in a loop and a
+ * calloc per turn of it would leak a word a time into the very heap it is
+ * about to copy. */
+int __fork_peek(int proc, int addr, int* out, int* got)
 {
 	int (*NtReadVirtualMemory)(int, int, int, int, int);
-	int* got;
 	int rc;
 
-	got = calloc(1, 4);
 	NtReadVirtualMemory = __ntdll(NT_READVM);
 	/* forwards: NtReadVirtualMemory(proc, addr, out, 4, got) */
 	rc = NtReadVirtualMemory(got, 4, out, addr, proc);
@@ -1061,10 +1062,13 @@ int __fork_peek(int proc, int addr, int* out)
  *   the child.  The child resolves them again anyway, before it parks, and is
  *   then given the parent's copies on top; the two agree.
  *
- *   Nothing here copies handles beyond the three standard ones __spawn already
- *   duplicates, so a file the parent had open is not open in the child.  A
- *   real fork would; this does not, and a caller wanting that would have to
- *   say so.
+ *   A file the parent had open is open in the child, at the same descriptor,
+ *   which is the whole reason open_file asks for OBJ_INHERIT: an inheritable
+ *   handle is the one kind a child receives, and it receives it under the
+ *   same number -- which is what keeps the number the copied memory is
+ *   holding meaningful.  POSIX hands every descriptor to a child across both
+ *   fork and exec unless it is marked FD_CLOEXEC, and there is no FD_CLOEXEC
+ *   here to ask for the other behaviour.
  *
  *   The child is a second process, so it has its own pid and its own parent as
  *   far as Windows is concerned.  Nothing that asks Windows rather than this
@@ -1085,6 +1089,7 @@ int fork()
 	int* ctx;
 	int* one;
 	int* seen;
+	int* got;
 	int ctx_raw;
 	int stack_low;
 	int stack_high;
@@ -1135,10 +1140,11 @@ int fork()
 	parked_at = __fork_parkedaddr();
 	seen = calloc(1, 4);
 	seen[0] = 0;
+	got = calloc(1, 4);
 	spins = 0;
 	while(0 == seen[0])
 	{
-		rc = __fork_peek(child, parked_at, seen);
+		rc = __fork_peek(child, parked_at, seen, got);
 		if(0 != rc)
 		{
 			NtTerminateProcess(1, child);

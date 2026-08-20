@@ -70,7 +70,7 @@ def emit_shared(a):
     emit_find_ntdll(a)
     emit_resolve_export(a)
     emit_next_token(a, tabs=True, escapes=True)
-    emit_open_file(a, check_status=True)
+    emit_open_file(a, check_status=True, inheritable=True)
 
     def I(hx, mn, prose=None):
         a.raw(bytes.fromhex(hx.replace(" ", "")), a._c(mn, prose))

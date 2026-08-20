@@ -694,7 +694,7 @@ def emit_next_token(a, tabs=False, escapes=False):
     I("31 C0", "xor eax, eax", "no token")
     a.ret("ret")
 
-def emit_open_file(a, check_status=False):
+def emit_open_file(a, check_status=False, inheritable=False):
     """Open one file by DOS path; see the DOC entry.
 
     check_status adds a test of the returned NTSTATUS, so a file that could not
@@ -713,7 +713,16 @@ def emit_open_file(a, check_status=False):
     a.mov_mem_imm("oa", 24, "OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)", off=0)
     a.mov_mem_imm("oa", 0, "OBJECT_ATTRIBUTES.RootDirectory = NULL", off=4)
     a.mov_mem_lbl("oa", "nt_path", "OBJECT_ATTRIBUTES.ObjectName = &nt_path", off=8)
-    a.mov_mem_imm("oa", 0x40, "OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE", off=12)
+    # OBJ_INHERIT is what makes a handle cross into a child, and cross under
+    # the same number, which is what fork needs of every file its caller had
+    # open.  Only the shared copy asks for it: hex0, hex1, hex2 and catm carry
+    # their own open_file, none of them forks, and hex0's bytes are the seed
+    # this whole chain is checked against -- so changing theirs would change
+    # the trust anchor to no purpose.
+    attrs = 0x42 if inheritable else 0x40
+    a.mov_mem_imm("oa", attrs,
+                  "OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE"
+                  + ("|OBJ_INHERIT" if inheritable else ""), off=12)
     a.mov_mem_imm("oa", 0, "OBJECT_ATTRIBUTES.SecurityDescriptor = NULL", off=16)
     a.mov_mem_imm("oa", 0, "OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL", off=20)
     a.push_imm(0, "EaLength"); a.push_imm(0, "EaBuffer")

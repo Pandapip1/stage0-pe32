@@ -227,7 +227,7 @@
 	C7 05 &oa 18 00 00 00       ; mov dword [oa], 0x18        # OBJECT_ATTRIBUTES.Length = 24 (x86 sizeof)
 	C7 05 &oa_root 00 00 00 00  ; mov dword [oa+4], 0x0       # OBJECT_ATTRIBUTES.RootDirectory = NULL
 	C7 05 &oa_name &nt_path     ; mov dword [oa+8], nt_path   # OBJECT_ATTRIBUTES.ObjectName = &nt_path
-	C7 05 &oa_attr 40 00 00 00  ; mov dword [oa+12], 0x40     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE
+	C7 05 &oa_attr 42 00 00 00  ; mov dword [oa+12], 0x42     # OBJECT_ATTRIBUTES.Attributes = OBJ_CASE_INSENSITIVE|OBJ_INHERIT
 	C7 05 &oa_sd 00 00 00 00    ; mov dword [oa+16], 0x0      # OBJECT_ATTRIBUTES.SecurityDescriptor = NULL
 	C7 05 &oa_sqos 00 00 00 00  ; mov dword [oa+20], 0x0      # OBJECT_ATTRIBUTES.SecurityQualityOfService = NULL
 	6A 00                       ; push 0x0                    # EaLength

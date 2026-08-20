@@ -239,10 +239,20 @@ returns to and `ESI+4` is the stack its caller will have, and that frame is
 above everything `fork`'s own later calls reuse. Aiming into `fork`'s middle
 resumes onto slots the spawn and the copies have long since overwritten.
 
-What it does not do: no handles beyond the three standard ones cross over, so a
-file the parent had open is not open in the child; and the child is a second
-process as far as Windows is concerned, with its own pid and its own parent, so
-nothing that asks Windows rather than this library will see a fork.
+A file the parent had open is open in the child, at the same descriptor. That
+is why the shared `open_file` asks for `OBJ_INHERIT`: an inheritable handle is
+the one kind a child receives, and it receives it under the *same number*,
+which is what keeps the number the copied memory is holding meaningful. POSIX
+hands every descriptor to a child across both fork and exec unless it is marked
+`FD_CLOEXEC`, and there is no `FD_CLOEXEC` here to ask for the other behaviour.
+Only the shared copy asks for it: `hex0`, `hex1`, `hex2` and `catm` carry their
+own `open_file`, none of them forks, and `hex0`'s bytes *are* the seed the
+chain is checked against -- so changing theirs would move the trust anchor to
+no purpose.
+
+What it does not do: the child is a second process as far as Windows is
+concerned, with its own pid and its own parent, so nothing that asks Windows
+rather than this library will see a fork.
 
 `x86/Development/fork-test.c` exercises it -- a local, something malloc handed
 out, the child's output landing in the parent's stream, `waitpid` bringing back
