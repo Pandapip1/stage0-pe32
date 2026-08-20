@@ -414,6 +414,7 @@ int __spawn_suspended(char* file_name, char** argv, char** envp, int* info)
 int __spawn(char* file_name, char** argv, char** envp)
 {
 	int (*NtResumeThread)(int, int);
+	int (*NtClose)(int);
 	int* info;
 	int thread;
 	int pid;
@@ -432,6 +433,12 @@ int __spawn(char* file_name, char** argv, char** envp)
 	thread = info[2];
 	/* forwards: NtResumeThread(thread, NULL) */
 	NtResumeThread(0, thread);
+
+	/* The thread handle has done its one job.  The process handle is what
+	 * comes back and is the caller's; this one would otherwise be leaked a
+	 * handle at a time, once per child ever started. */
+	NtClose = __ntdll(NT_CLOSE);
+	NtClose(thread);
 
 	return pid;
 }
@@ -1083,6 +1090,7 @@ int fork()
 	int (*NtSuspendThread)(int, int);
 	int (*NtTerminateProcess)(int, int);
 	int (*NtAllocateVirtualMemory)(int, int, int, int, int, int);
+	int (*NtClose)(int);
 	char* path;
 	char** argv;
 	int* info;
@@ -1287,6 +1295,12 @@ int fork()
 	/* Suspended twice: once by us just now, once by the spin it was in.  Let
 	 * it go the once; it was resumed out of its creation suspend already. */
 	NtResumeThread(0, thread);
+
+	/* As in __spawn: the thread handle is finished with, and a fork that
+	 * leaked one per call would run a program out of handles long before it
+	 * ran it out of anything else. */
+	NtClose = __ntdll(NT_CLOSE);
+	NtClose(thread);
 
 	return child;
 }
