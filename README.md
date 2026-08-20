@@ -235,14 +235,40 @@ that observation does and does not establish.
 Where it stops depends on the flags, and an earlier version of this section
 saying otherwise was wrong. Without `NO_SYNCHRONIZE` the child **deadlocks**;
 with it the child **runs and dies** of an access violation. The deadlock is an
-inherited lock and is now understood. `RtlCloneUserProcess` holds the SRW lock
-at `ntdll+0x12d7a4` exclusively across the clone, so the child's address space
-is a snapshot in which it is held; the child's new thread then runs
-`LdrInitializeThunk` like any new thread, loader init wants that same lock
-shared, and it waits in `NtWaitForAlertByThreadId` to be alerted by a thread
-that does not exist on this side of the fork. Read out of the suspended child:
-EIP in `ZwWaitForAlertByThreadId`, the lock's address twice on the stack, and
-`LdrInitializeThunk` further up it.
+inherited lock. `RtlCloneUserProcess` holds the SRW lock at `ntdll+0x12d7a4`
+exclusively across the clone -- disassembling it shows that address four times
+inside the one routine -- so the child's address space is a snapshot in which it
+is held, and anything on the child's side that wants it shared waits in
+`NtWaitForAlertByThreadId` to be alerted by a thread that does not exist on this
+side of the fork. Read out of the child: EIP in `ZwWaitForAlertByThreadId`, the
+lock's address twice on the stack, and `LdrInitializeThunk` further up it.
+
+An earlier version of this section called that "now understood" and put the
+deadlock first, with the `fs:0x18` fault below as a second, later failure that
+only shows up once the lock is out of the way. That is backwards, and the same
+stack that settled the `LdrInitializeThunk` question says so. Without touching
+the lock at all, the deadlocked child's stack holds, above the frames it is
+currently in:
+
+    0x85ff300   an EXCEPTION_RECORD: ExceptionCode 0xc0000005,
+                ExceptionAddress ntdll+0x8c5d6, NumberParameters 2,
+                ExceptionInformation 0 (a read) and 0x18
+    0x85ff350   the CONTEXT paired with it: ContextFlags 0x1007f,
+                Eip ntdll+0x8c5d6, Cs 0x23, Esp 0x85ff7b8, SegFs 0x53
+    0x85ff2ec   a return address in KiUserExceptionDispatcher+0x26
+
+and below that nothing but exception dispatch -- `RtlUnwind`,
+`_except_handler4_common`, `_local_unwind4` -- ending in
+`RtlAcquireSRWLockShared+0x148` with `ntdll+0x12d7a4` as its argument, at
+`ZwWaitForAlertByThreadId`.
+
+So the fault comes first, every time, lock or no lock. What waits on the
+inherited lock is the *exception dispatcher*, trying to report a fault that has
+already happened. The child is not stopped short of the fault by a lock; it is
+stopped short of ever saying so. Zeroing the lock does not let the child get
+further, it lets the fault be reported, so the process dies instead of hanging.
+One defect, not two, and the second symptom was only ever the first one being
+unable to speak.
 
 That "like any new thread" is worth checking rather than assuming, since the
 clone's own thread was a real, running thread before the clone -- it had a
@@ -299,10 +325,11 @@ brand-new thread *and* it resumes from the same program counter as its parent
 it off to, and there was never a contradiction between them. No debug port was
 needed for this after all; the stack said it.
 
-Zeroing that lock in the child before letting it go removes the deadlock, and
-the child then gets exactly as far as the `NO_SYNCHRONIZE` one: an access
-violation at `ntdll+0x8c5d6`, which is `mov eax, fs:0x18`, inside a function
-whose only caller in the whole DLL is `LdrInitializeThunk`.
+Zeroing that lock in the child before letting it go therefore turns the hang
+into what `NO_SYNCHRONIZE` already showed: an access violation at
+`ntdll+0x8c5d6`, which is `mov eax, fs:0x18`, inside a function whose only
+caller in the whole DLL is `LdrInitializeThunk`. The same fault either way --
+only its reporting differs.
 
 Loader init is the wrong thing for a fork's child to run at all, and there is a
 flag for that -- `THREAD_CREATE_FLAGS_SKIP_LOADER_INIT` -- which
