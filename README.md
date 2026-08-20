@@ -210,15 +210,33 @@ it, makes a thread in the result, and is meant to return in both processes,
 handing the child `STATUS_PROCESS_CLONED` where the parent gets
 `STATUS_SUCCESS`.
 
-It does not work. On Windows 11 22621 the parent gets success and a genuine
-cloned process -- two in `tasklist`, the child reported `STATUS_PENDING` -- and
-the child's one thread, which is not suspended, sits in `Wait` and never
-reaches the first statement after the call. Every flag combination behaves the
-same, and it is neither this port's doing nor WOW64's: the identical call from
-64-bit and from 32-bit PowerShell clones the process and never returns in the
-child either. `__clone_process` keeps the call and the measurements; `fork`
-returns -1, because a fork whose child never runs would hang the first caller
-to wait for it.
+It does not work, by any of the four routes in, all measured on Windows 11
+22621:
+
+| | |
+| --- | --- |
+| `RtlCloneUserProcess` | clones, and the child never comes back |
+| `NtCreateProcessEx` | clones, and the clone cannot be given a thread |
+| `NtCreateProcess` | the same, by the older name |
+| `NtCreateUserProcess` | the supported one, which does not clone at all |
+
+The parent gets success and a genuine cloned process -- two in `tasklist`, the
+child reported `STATUS_PENDING` -- and the child's one thread, which is not
+suspended, sits in `Wait` and never reaches the first statement after the call.
+Every flag combination behaves the same, and it is neither this port's doing
+nor WOW64's: the identical call from 64-bit and from 32-bit PowerShell clones
+the process and never returns in the child either.
+
+Doing it by hand fails one step earlier. `NtCreateProcessEx` and
+`NtCreateProcess`, each given this process as the parent and no section handle,
+both clone and hand back a process handle -- and `NtCreateThreadEx` then
+refuses to put a thread in either, with `STATUS_PROCESS_IS_TERMINATING`,
+whatever thread flags are asked for, `SKIP_LOADER_INIT` included. A clone with
+no thread is torn down before it can be given one.
+
+`__clone_process` keeps the call and the measurements; `fork` returns -1,
+because a fork whose child never runs would hang the first caller to wait for
+it.
 
 So the three steps of fork-exec-wait, taken apart into ones Windows can do:
 
@@ -235,7 +253,16 @@ the change `kaem` and M2-Mesoplanet would want, and it is two lines.
 
 The child is meant to inherit this process's three standard handles, which is
 what would make redirection possible, and here the port has a defect: it works
-under wine and not on Windows. The handles are duplicated with `OBJ_INHERIT`
+under wine and not on Windows. `NtCreateUserProcess` called directly rather
+than through `RtlCreateUserProcess` was tried, because its `PS_ATTRIBUTE_LIST`
+is the only way to ask for `PsAttributeStdHandleInfo` and
+`PsAlwaysDuplicate` -- "always duplicate standard handles" -- and it does not
+fix this. It needs every structure 8-aligned, since `PS_CREATE_INFO` holds
+`ULONGLONG`s and the kernel answers `STATUS_DATATYPE_MISALIGNMENT` otherwise;
+with that done it returns `PsCreateSuccess`, the child runs -- hex0 started
+that way assembles the seed byte for byte -- and its writes to the standard
+handles still go nowhere. So `__spawn` keeps `RtlCreateUserProcess`, which is
+the same call with less to get wrong. The handles are duplicated with `OBJ_INHERIT`
 and their numbers written into the child's parameter block, the child reads the
 same numbers back out of its own PEB, and `NtWriteFile` to them returns success
 and a count -- and on Windows the bytes go nowhere. A child still runs, still

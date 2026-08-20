@@ -7,6 +7,24 @@
  * Starting another program, and waiting for it.
  *
  * Windows really does have a fork primitive, and it really does not work.
+ * There are four ways in, and all four were measured on Windows 11 22621:
+ *
+ *   RtlCloneUserProcess    clones, and the child never comes back
+ *   NtCreateProcessEx      clones, and the clone cannot be given a thread
+ *   NtCreateProcess        the same, by the older name
+ *   NtCreateUserProcess    the supported one, which does not clone at all
+ *
+ * The first three are written up at __clone_process.  The fourth is what
+ * RtlCreateUserProcess calls underneath and what __spawn therefore already
+ * uses; calling it directly buys the PS_ATTRIBUTE_LIST, which is the only way
+ * to ask for PsAttributeStdHandleInfo -- and asking for it, with
+ * PsAlwaysDuplicate, does not fix the standard handles either.  That was
+ * tried: it needs every structure 8-aligned, since PS_CREATE_INFO holds
+ * ULONGLONGs and the kernel says STATUS_DATATYPE_MISALIGNMENT otherwise, and
+ * with that done it returns PsCreateSuccess and the child runs -- hex0
+ * started that way assembles the seed byte for byte -- and its writes to the
+ * standard handles still go nowhere.  So __spawn keeps RtlCreateUserProcess,
+ * which is the same call with less to get wrong.
  *
  * NtCreateProcessEx given a parent and no section handle clones the parent's
  * address space rather than mapping an image -- ReactOS's own PspCreateProcess
@@ -413,6 +431,14 @@ int execve(char* file_name, char** argv, char** envp)
  *   Every flag combination behaves the same: 0, CREATE_SUSPENDED,
  *   INHERIT_HANDLES, both, NO_SYNCHRONIZE, and NO_SYNCHRONIZE with
  *   INHERIT_HANDLES.
+ *
+ *   Doing it by hand does not help.  NtCreateProcessEx and NtCreateProcess,
+ *   each given this process as the parent and no section handle, both clone
+ *   successfully and hand back a process handle -- and NtCreateThreadEx then
+ *   refuses to put a thread in either of them, with
+ *   STATUS_PROCESS_IS_TERMINATING, whatever thread flags are asked for,
+ *   SKIP_LOADER_INIT included.  A clone with no thread is torn down before it
+ *   can be given one.
  *
  *   It is not this port's doing and not WOW64's.  The same call from 64-bit
  *   PowerShell and from 32-bit PowerShell, through P/Invoke, clones the
