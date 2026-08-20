@@ -288,10 +288,15 @@ It does not work, by any of the four routes in, all measured on Windows 11
 
 | | |
 | --- | --- |
-| `RtlCloneUserProcess` | clones, and the clone's child runs with no FS base |
+| `RtlCloneUserProcess` | clones, and under WOW64 the clone's child runs with no FS base |
 | `NtCreateProcessEx` | clones, and the clone cannot be given a thread |
 | `NtCreateProcess` | the same, by the older name |
 | `NtCreateUserProcess` | the supported one, which does not clone at all |
+
+The first of those was measured again from a native 64-bit caller on the same
+machine, and there the clone's child does come back, and runs. So the defect is
+WOW64's rather than cloning's -- no help at all to a 32-bit bootstrap, but it
+says where to look in an x86_64 one.
 
 The parent gets success and a genuine cloned process -- two in `tasklist`, the
 child reported `STATUS_PENDING` -- and the child's one thread, which is not
@@ -692,6 +697,50 @@ documented API is a wrapper over the very call already known to make unrunnable
 clones, and being documented does not make its clone runnable. Nothing in the
 box runs code in a VA clone, and the reason is not that nobody wrote the code
 to: the kernel will not have it.
+
+That is both roads shut for `NtCreateProcessEx`. The other road --
+`RtlCloneUserProcess`, through `ZwCreateUserProcess` -- turns out not to be shut
+at all. **It is shut under WOW64, and only there.**
+
+The same script, run twice within a minute on this machine, differing in nothing
+but which PowerShell ran it, cloning itself with
+`CREATE_SUSPENDED|NO_SYNCHRONIZE` so the inherited lock cannot be the story,
+reading the new thread's context before it runs and its exit status after:
+
+| caller | initial context | on resume |
+| --- | --- | --- |
+| 32-bit | `Eip` `ZwCreateUserProcess+0xc`, `Cs` `0x23`, `Fs` `0x53` | dies, exit status `0xc0000409` |
+| 64-bit | `Rip` `ZwCreateUserProcess+0x14`, `Cs` `0x33` | **runs** |
+
+Runs, and not a little. The 64-bit clone comes back from the call, compares the
+returned status against `STATUS_PROCESS_CLONED`, takes that branch, calls out
+through `kernel32` into the kernel, finds that call failed, and exits with the
+value its own code picks for a failed call rather than the one it picks for a
+successful one. Choosing correctly between two exit codes is the proof: that is
+a comparison, a call, a system call and a return, all after the clone.
+
+Both entry points are the return from the same system call -- number `0xcf`
+either way. `ZwCreateUserProcess+0xc` is the `ret 0x2c` after `call edx` in the
+32-bit stub; `ZwCreateUserProcess+0x14` is the `ret` after `syscall` in the
+64-bit one. Same call, same kernel, same minute; one clone runs and the other
+cannot.
+
+Which finally puts a name on the `fs:0x18` fault, and it is not this port's name
+and not this machine's. A 64-bit thread reaches its TEB through `GS`, whose base
+is a model-specific register the kernel reloads on every switch to the thread,
+out of the thread object itself -- nothing per-process to arrange, so nothing
+for a clone to lose. A 32-bit thread on the same machine reaches its TEB through
+`FS`, whose base lives in a descriptor the kernel programs from that thread's
+32-bit TEB, and that is the piece a cloned thread does not get. The defect is in
+the WOW64 half of process cloning. The suggestion above that an x86_64 port
+should ask this question again now rests on a measurement instead of on hope.
+
+So, for a 32-bit program on a 64-bit Windows, a copy-on-write `fork` is out of
+reach from user mode, by both roads and for two unrelated reasons: the
+`NtCreateProcessEx` clone is refused a thread as a matter of kernel policy, and
+the `ZwCreateUserProcess` clone is given a thread with no `FS` base. Neither is
+something a caller can hold differently. The `fork` above copies, and will go on
+copying.
 
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
