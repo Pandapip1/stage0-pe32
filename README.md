@@ -459,16 +459,53 @@ granting that access is itself proof the security check already passed, and
 `NtCreateThreadEx` failed anyway with the same already-granted handle. So
 this was not going to settle the clone question either way, which running the
 identical sequence against an ordinary `__spawn` child instead of a clone
-confirmed: `STATUS_ACCESS_DENIED` there too. Cross-process thread creation is
-refused here regardless of how the target process came to exist, which
-points at a precondition on the caller -- `SeDebugPrivilege` not being
-enabled is the well-known one for exactly this operation -- rather than
-anything about cloning. Enabling it needs `LookupPrivilegeValue`, which is
-`advapi32`, not `ntdll`, and out of reach of the ntdll-only calls this port
-makes; hardcoding the LUID it would resolve to was not done, on the same
-principle as everywhere else here: measured, not assumed. So the fresh-thread
-question above is still open, blocked on infrastructure this probe did not
-have, not on a result that closes it.
+confirmed: `STATUS_ACCESS_DENIED` there too. The conclusion drawn from that --
+that cross-process thread creation is refused here as a matter of the caller's
+privileges, `SeDebugPrivilege` not being enabled -- is wrong, and wrong in both
+halves.
+
+`SeDebugPrivilege` does not need `advapi32` to reach.
+[`RtlAdjustPrivilege`](https://ntdoc.m417z.com/rtladjustprivilege) is an
+`ntdll` export, and it takes the privilege as a plain `ULONG` LUID rather than
+the `LUID_AND_ATTRIBUTES` that
+[`LookupPrivilegeValue`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-lookupprivilegevaluew)
+exists to fill in, so the objection about it being out of reach of an
+ntdll-only port was simply mistaken. The number is 20, which is what phnt's
+`ntseapi.h` calls
+[`SE_DEBUG_PRIVILEGE`](https://ntdoc.m417z.com/se_debug_privilege) -- and
+rather than take that on faith,
+`LookupPrivilegeValue("SeDebugPrivilege")` was asked on this machine and
+answers 20 as well.
+
+And the privilege was never missing. `RtlAdjustPrivilege(20, TRUE, FALSE,
+&was)` from inside the probe returns `STATUS_SUCCESS` with `WasEnabled`
+already 1: this token has had `SeDebugPrivilege` enabled the whole time, which
+`whoami /priv` agrees with. So the denial had some other cause, and the
+likeliest is a handle asked for too little rather than a caller granted too
+little. A missing access right is indistinguishable from a missing privilege
+from the outside -- both are `STATUS_ACCESS_DENIED` -- and this port walked
+into that again while writing the probes below: `NtGetContextThread` on a
+thread handle created without
+[`THREAD_GET_CONTEXT`](https://learn.microsoft.com/en-us/windows/win32/procthread/thread-security-and-access-rights)
+answers `STATUS_ACCESS_DENIED` and nothing else.
+
+Written again and measured, cross-process thread creation is not refused here
+at all. [`NtCreateThreadEx`](https://ntdoc.m417z.com/ntcreatethreadex) into an
+ordinary `__spawn` child, with a `DesiredAccess` made of bits that are written
+down -- `SYNCHRONIZE`, `THREAD_TERMINATE`, `THREAD_SUSPEND_RESUME`,
+`THREAD_QUERY_INFORMATION` -- and `RtlExitUserProcess` as `StartRoutine` with
+`0x5a5a` as its `Argument`, returns `STATUS_SUCCESS`, and the child exits with
+`0x5a5a`. A fresh thread in another process runs, and runs ordinary code that
+reaches the system. `THREAD_ALL_ACCESS` is deliberately not used for this: its
+value is not written down anywhere authoritative, and those four bits are.
+
+The same injection with `CreateFlags = THREAD_CREATE_FLAGS_SKIP_LOADER_INIT`
+also returns `STATUS_SUCCESS`, and the child then dies of
+`STATUS_ACCESS_VIOLATION` -- the `r15` finding above, reproduced across a
+process boundary rather than within one.
+
+So the fresh-thread question above is open again, and this time for want of an
+answer rather than for want of a working probe.
 
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
