@@ -405,6 +405,10 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_alloc                ; mov [fn_alloc], eax
+	68 &name_RtlCloneUserProcess ; push name_RtlCloneUserProcess
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_clone                ; mov [fn_clone], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -508,6 +512,9 @@
 :name_NtAllocateVirtualMemory
 4E 74 41 6C 6C 6F 63 61 74 65 56 69 72 74 75 61 6C 4D 65 6D 6F 72 79 00 # name_NtAllocateVirtualMemory = "NtAllocateVirtualMemory"
 
+:name_RtlCloneUserProcess
+52 74 6C 43 6C 6F 6E 65 55 73 65 72 50 72 6F 63 65 73 73 00 # name_RtlCloneUserProcess = "RtlCloneUserProcess"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
@@ -579,6 +586,9 @@
 
 :fn_alloc
 00 00 00 00                     # fn_alloc: slot 22, resolved NtAllocateVirtualMemory -- a real brk, for a program too big to live inside the image
+
+:fn_clone
+00 00 00 00                     # fn_clone: slot 23, resolved RtlCloneUserProcess -- fork; absent on wine, where the slot stays 0
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access

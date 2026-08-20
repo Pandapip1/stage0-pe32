@@ -27,7 +27,10 @@ BOUNDARY = "__shared_end"
 #
 # The first eight are what the hand-written stages need and are reached from
 # assembly by name.  The rest are for the POSIX layer above, which reaches them
-# by slot from C.  Resolving all of them in every program costs a walk of
+# by slot from C.  A name ntdll does not export leaves its slot 0 rather than
+# failing -- resolve_export returns 0 when it runs off the end of the export
+# table -- so a routine that only some Windows-alikes have can be listed here
+# and checked for by the one caller that wants it.  Resolving all of them in every program costs a walk of
 # ntdll's export table each, at startup, which is not measurable next to the
 # rest of what these programs do.
 NTDLL = [
@@ -54,6 +57,7 @@ NTDLL = [
     ("fn_createproc", "RtlCreateUserProcess",         "__spawn"),
     ("fn_resume",     "NtResumeThread",               "__spawn: a new process starts suspended"),
     ("fn_alloc",      "NtAllocateVirtualMemory",      "a real brk, for a program too big to live inside the image"),
+    ("fn_clone",      "RtlCloneUserProcess",          "fork; absent on wine, where the slot stays 0"),
 ]
 
 def emit_shared(a):

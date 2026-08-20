@@ -6,20 +6,24 @@
  *
  * Starting another program, and waiting for it.
  *
- * There is no fork here, and there is not going to be one.  fork's whole
- * meaning is that the child comes back from the same call with the same memory
- * and carries on from the same line, and Windows has no call that does that.
- * ntdll exports RtlCloneUserProcess, which is the closest thing, but it clones
- * an address space the Win32 side of the system knows nothing about, and this
- * port cannot test it: wine does not export it at all.  So fork fails, and
- * says why.
+ * Windows really does have a fork primitive, and it really does not work.
  *
- * What is here instead is the three steps of the fork-exec-wait pattern taken
- * apart, so a caller can spell it the way Windows can actually do it:
+ * NtCreateProcessEx given a parent and no section handle clones the parent's
+ * address space rather than mapping an image -- ReactOS's own PspCreateProcess
+ * reaches that branch and says "This is a clone!" before declining to
+ * implement it -- and RtlCloneUserProcess is the wrapper around it that makes
+ * a thread in the result and is meant to return in both processes, telling the
+ * child which it is by handing it STATUS_PROCESS_CLONED where the parent gets
+ * STATUS_SUCCESS.  __clone_process below is that call, and what it does on
+ * Windows 11 is written up there.  fork returns -1, because a fork whose child
+ * never runs is worse than no fork at all.
+ *
+ * So three steps rather than four, and a caller wanting a child says __spawn
+ * and waitpid where it would have said fork and execve:
  *
  *   __spawn(path, argv, envp)  start a program; a handle to it comes back
  *   waitpid(pid, &status, 0)   wait for one of those to finish
- *   execve(path, argv, envp)   both of the above, and then exit as it did
+ *   execve(path, argv, envp)   __spawn and waitpid, and then exit as it did
  *
  * A pid here is the process handle, the same way a file descriptor elsewhere
  * in this port is a file handle.  execve does not replace the running image --
@@ -27,11 +31,11 @@
  * exit status is the child's, so the only way to tell is to look at the
  * process list while it runs.
  *
- * A program that today says
+ * A program that says
  *
  *   pid = fork(); if(0 == pid) execve(f, argv, envp); else waitpid(pid, &s, 0);
  *
- * says this instead, and needs no fork:
+ * says this instead, which is two lines and no fork:
  *
  *   pid = __spawn(f, argv, envp); waitpid(pid, &s, 0);
  *
@@ -391,9 +395,80 @@ int execve(char* file_name, char** argv, char** envp)
 	exit(status[0] / 256);
 }
 
-/* See the top of this file.  Windows has no call that returns twice, and a
- * caller that wants a child should use __spawn and waitpid, which are what
- * fork and execve would have been built out of anyway. */
+/* What fork would be, if the clone's child ever came back.
+ *
+ * Kept, and not called, because the knowledge is worth more than the code and
+ * because a system where this works would get a real fork for free.  What was
+ * measured on Windows 11 22621, from this and independently from elsewhere:
+ *
+ *   The parent gets STATUS_SUCCESS and a genuine cloned process -- tasklist
+ *   shows two, and NtQueryInformationProcess reports the child as
+ *   STATUS_PENDING, so it exists and has not exited.
+ *
+ *   Its one thread is not suspended: NtResumeThread returns a previous
+ *   suspend count of 0.  It sits in Wait, and never reaches the first
+ *   statement after the call -- checked by having that statement be a single
+ *   fopen of a file whose presence is the whole test.
+ *
+ *   Every flag combination behaves the same: 0, CREATE_SUSPENDED,
+ *   INHERIT_HANDLES, both, NO_SYNCHRONIZE, and NO_SYNCHRONIZE with
+ *   INHERIT_HANDLES.
+ *
+ *   It is not this port's doing and not WOW64's.  The same call from 64-bit
+ *   PowerShell and from 32-bit PowerShell, through P/Invoke, clones the
+ *   process and never returns in the child either.
+ *
+ * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
+ * which is checked rather than assumed: resolve_export returns 0 for a name
+ * that is not in the export table.
+ *
+ * The parent would get the child's process handle, which is what waitpid here
+ * takes -- POSIX would give a pid, and this is the same substitution as a file
+ * descriptor being a handle. */
+int __clone_process()
+{
+	int (*RtlCloneUserProcess)(int, int, int, int, int);
+	int (*NtResumeThread)(int, int);
+	int* info;
+	int thread;
+	int i;
+	int rc;
+
+	RtlCloneUserProcess = __ntdll(NT_CLONE);
+	if(NULL == RtlCloneUserProcess) return -1;
+
+	/* RTL_USER_PROCESS_INFORMATION, as __spawn fills in */
+	info = calloc(32, 4);
+	i = 0;
+	while(i < 32)
+	{
+		info[i] = 0;
+		i = i + 1;
+	}
+	info[0] = 68;
+
+	/* forwards: RtlCloneUserProcess(RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES,
+	 *                               NULL, NULL, NULL, info) */
+	rc = RtlCloneUserProcess(info, 0, 0, 0, 2);
+
+	if(0x129 == rc) return 0;        /* STATUS_PROCESS_CLONED: this is the child */
+	if(0 != rc) return -1;
+
+	/* The clone's first thread starts suspended, the same way the one
+	 * RtlCreateUserProcess makes does, so the child does not come back from
+	 * the call above until it is let go. */
+	NtResumeThread = __ntdll(NT_RESUME);
+	thread = info[2];
+	/* forwards: NtResumeThread(thread, NULL) */
+	NtResumeThread(0, thread);
+
+	return info[1];                  /* and the parent gets a handle to it */
+}
+
+/* Windows has the primitive and the primitive does not work; see
+ * __clone_process.  Failing here is deliberate: a fork whose parent gets a
+ * child handle and whose child never runs would hang the first caller to wait
+ * for it, which is worse than a fork that says it cannot. */
 int fork()
 {
 	return -1;

@@ -200,13 +200,27 @@ debugging rounds in one sitting, so `x86/Development/check_fnptr_args.py`
 fails on one now, and is checked against all three.
 
 `x86/M2libc-windows/process.c` is starting another program and waiting for it,
-and it is the one place this port cannot keep the POSIX shape. fork's whole
-meaning is that the child comes back from the same call with the same memory,
-and Windows has no call that does that -- ntdll's `RtlCloneUserProcess` is the
-nearest thing, clones an address space the Win32 side knows nothing about, and
-cannot be tested here at all, since wine does not export it. So `fork` fails
-and says why, and the three steps of fork-exec-wait are taken apart into ones
-Windows can do:
+and it is the one place this port cannot keep the POSIX shape.
+
+Windows does have a fork primitive. `NtCreateProcessEx` given a parent and no
+section handle clones the parent's address space instead of mapping an image --
+ReactOS's own `PspCreateProcess` reaches that branch and says *"This is a
+clone!"* before declining to implement it -- and `RtlCloneUserProcess` wraps
+it, makes a thread in the result, and is meant to return in both processes,
+handing the child `STATUS_PROCESS_CLONED` where the parent gets
+`STATUS_SUCCESS`.
+
+It does not work. On Windows 11 22621 the parent gets success and a genuine
+cloned process -- two in `tasklist`, the child reported `STATUS_PENDING` -- and
+the child's one thread, which is not suspended, sits in `Wait` and never
+reaches the first statement after the call. Every flag combination behaves the
+same, and it is neither this port's doing nor WOW64's: the identical call from
+64-bit and from 32-bit PowerShell clones the process and never returns in the
+child either. `__clone_process` keeps the call and the measurements; `fork`
+returns -1, because a fork whose child never runs would hang the first caller
+to wait for it.
+
+So the three steps of fork-exec-wait, taken apart into ones Windows can do:
 
     __spawn(path, argv, envp)   start a program; a handle to it comes back
     waitpid(pid, &status, 0)    wait for one of those to finish

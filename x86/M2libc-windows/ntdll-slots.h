@@ -37,5 +37,6 @@
 #define NT_CREATEPROC  20  /* RtlCreateUserProcess: __spawn */
 #define NT_RESUME      21  /* NtResumeThread: __spawn: a new process starts suspended */
 #define NT_ALLOC       22  /* NtAllocateVirtualMemory: a real brk, for a program too big to live inside the image */
+#define NT_CLONE       23  /* RtlCloneUserProcess: fork; absent on wine, where the slot stays 0 */
 
 #endif

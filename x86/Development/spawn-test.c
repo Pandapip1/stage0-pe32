@@ -53,7 +53,7 @@ int main(int argc, char** argv)
 
 	fputs("fork() = ", stdout);
 	fputs(int2str(fork(), 10, TRUE), stdout);
-	fputs("   (expected -1: Windows has no call that returns twice)\n", stdout);
+	fputs("   (expected -1: see __clone_process in M2libc-windows/process.c)\n", stdout);
 	fflush(stdout);
 
 	/* argv[1] onwards, in an array of its own */
