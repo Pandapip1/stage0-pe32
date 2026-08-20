@@ -29,12 +29,18 @@
  * NtCreateProcessEx given a parent and no section handle clones the parent's
  * address space rather than mapping an image -- ReactOS's own PspCreateProcess
  * reaches that branch and says "This is a clone!" before declining to
- * implement it -- and RtlCloneUserProcess is the wrapper around it that makes
- * a thread in the result and is meant to return in both processes, telling the
- * child which it is by handing it STATUS_PROCESS_CLONED where the parent gets
- * STATUS_SUCCESS.  __clone_process below is that call, and what it does on
- * Windows 11 is written up there.  fork returns -1, because a fork whose child
- * never runs is worse than no fork at all.
+ * implement it.  An earlier version of this comment said RtlCloneUserProcess
+ * wraps that call.  It does not: disassembling ntdll32.dll shows
+ * RtlCloneUserProcess calling a private helper that ends in
+ * ZwCreateUserProcess, the same syscall behind ordinary process creation, not
+ * NtCreateProcessEx.  So there are two unrelated clone paths through the
+ * kernel, not one built on the other, and a defect found in one says nothing
+ * about the other.  RtlCloneUserProcess makes a thread in the result and is
+ * meant to return in both processes, telling the child which it is by handing
+ * it STATUS_PROCESS_CLONED where the parent gets STATUS_SUCCESS.
+ * __clone_process below is that call, and what it does on Windows 11 is
+ * written up there.  fork returns -1, because a fork whose child never runs
+ * is worse than no fork at all.
  *
  * So three steps rather than four, and a caller wanting a child says __spawn
  * and waitpid where it would have said fork and execve:
@@ -604,6 +610,50 @@ int execve(char* file_name, char** argv, char** envp)
  *   snapshot that is read and discarded rather than run.  Nothing measured
  *   here contradicts the possibility that a clone cannot be made to run
  *   ordinary code at all.
+ *
+ *   One thing does not depend on any of the above and was worth checking on
+ *   its own: whether this machine can clone a 32-bit process by ANY in-box
+ *   route, which would rule the whole failure in or out as a platform limit
+ *   rather than a misuse of one specific call.  PssCaptureSnapshot, the
+ *   documented Windows 8.1+ snapshotting API, answers yes -- called against a
+ *   real 32-bit process with PSS_CAPTURE_VA_CLONE it returns ERROR_SUCCESS,
+ *   and PssQuerySnapshot(PSS_QUERY_VA_CLONE_INFORMATION) hands back a clone
+ *   that GetExitCodeProcess reports STILL_ACTIVE and IsWow64Process reports
+ *   genuinely 32-bit.  So this machine, this hypervisor, this WOW64 -- none of
+ *   them are categorically incapable of a working 32-bit clone.
+ *
+ *   That does not settle the question above, though, and it would be the same
+ *   mistake again to claim it did.  PssCaptureSnapshot is not
+ *   RtlCloneUserProcess by another name: it calls PssNtCaptureSnapshot, which
+ *   goes through NtCreateProcessEx -- the very call ReactOS's PspCreateProcess
+ *   was seen declining to implement, and, per the correction above, a
+ *   different syscall from the one RtlCloneUserProcess actually uses.  What is
+ *   confirmed is narrower than "cloning works here": the NtCreateProcessEx
+ *   clone path works here, completely, for a 32-bit target, with whatever
+ *   WOW64 setup that path does that RtlCloneUserProcess's does not.  Whether
+ *   RtlCloneUserProcess's own path -- through ZwCreateUserProcess -- shares
+ *   that defect, has a different one, or has none at all under different
+ *   handling is exactly as open as it was.  What this does rule out is the
+ *   broadest excuse available: "this VM just can't do it."  Something here
+ *   can.  Whether the thing __clone_process calls is that something remains
+ *   unknown.
+ *
+ *   One question about RtlCloneUserProcess's own clone can be answered
+ *   without running anything on the side that is broken: is the FS-with-no-
+ *   base defect a property of the one thread the clone hands back, or of the
+ *   clone process itself?  Clone with CREATE_SUSPENDED and never resume that
+ *   thread -- so neither the lock deadlock nor the FS fault above can happen
+ *   -- and ask NtQueryInformationProcess(ProcessWow64Information, class 26)
+ *   about the child's process handle.  It answers with a real PEB32 address,
+ *   not zero and not a failing status.  So the clone's process-level WOW64
+ *   association came through intact; what is missing is scoped to the one
+ *   thread, not the process.  That keeps open a narrower question than the
+ *   one above: whether a thread made the ordinary way afterwards -- fresh,
+ *   with NtCreateThreadEx, never touching the cloned thread at all -- would
+ *   get the segment setup that thread did not.  Not yet tried: it needs a
+ *   start routine that never returns through an ordinary call frame, since
+ *   nothing calls back into it the way M2-Planet's own calling convention
+ *   assumes.
  *
  * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
  * which is checked rather than assumed: resolve_export returns 0 for a name

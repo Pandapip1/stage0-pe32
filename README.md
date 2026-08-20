@@ -205,10 +205,15 @@ and it is the one place this port cannot keep the POSIX shape.
 Windows does have a fork primitive. `NtCreateProcessEx` given a parent and no
 section handle clones the parent's address space instead of mapping an image --
 ReactOS's own `PspCreateProcess` reaches that branch and says *"This is a
-clone!"* before declining to implement it -- and `RtlCloneUserProcess` wraps
-it, makes a thread in the result, and is meant to return in both processes,
-handing the child `STATUS_PROCESS_CLONED` where the parent gets
-`STATUS_SUCCESS`.
+clone!"* before declining to implement it. An earlier version of this section
+said `RtlCloneUserProcess` wraps that call. It does not: disassembling
+`ntdll32.dll` shows it calling a private helper that ends in
+`ZwCreateUserProcess`, the same syscall behind ordinary process creation, not
+`NtCreateProcessEx`. Two unrelated clone paths through the kernel, not one
+built on the other -- so a defect found in one says nothing about the other.
+`RtlCloneUserProcess` makes
+a thread in the result and is meant to return in both processes, handing the
+child `STATUS_PROCESS_CLONED` where the parent gets `STATUS_SUCCESS`.
 
 It does not work, by any of the four routes in, all measured on Windows 11
 22621:
@@ -329,6 +334,54 @@ none at all -- the plain passive snapshot reflection is actually for --
 `RtlCreateProcessReflection` does not return, and the calling process
 disappears without so much as a fault record. That is not understood either, and
 a conclusion built on top of it would not be worth having.
+
+One check does not depend on any of the above, and is worth doing on its own:
+whether this machine can clone a 32-bit process by *any* in-box route at all,
+which would rule the whole failure in or out as a platform limit rather than a
+misuse of one specific call.
+[`PssCaptureSnapshot`](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/nf-processsnapshot-psscapturesnapshot),
+the documented Windows 8.1+ snapshotting API, says yes: called against a real
+32-bit `cmd.exe` with
+[`PSS_CAPTURE_VA_CLONE`](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/ne-processsnapshot-pss_capture_flags)
+it returns `ERROR_SUCCESS`, and
+[`PssQuerySnapshot`](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/api/processsnapshot/nf-processsnapshot-pssquerysnapshot)`(PSS_QUERY_VA_CLONE_INFORMATION)`
+hands back a clone process handle that `GetExitCodeProcess` reports
+`STILL_ACTIVE` and `IsWow64Process` reports genuinely 32-bit. So this machine,
+this hypervisor, this WOW64 -- none of them are categorically incapable of a
+working 32-bit clone.
+
+That does not settle the question above, though, and claiming it did would be
+the same mistake again. `PssCaptureSnapshot` is not `RtlCloneUserProcess` by
+another name: internally it calls `PssNtCaptureSnapshot`, which -- per
+[Hunt & Hackett's write-up of process cloning on
+Windows](https://www.huntandhackett.com/blog/the-definitive-guide-to-process-cloning-on-windows)
+-- relies on `NtCreateProcessEx`-based cloning: the very call
+`PspCreateProcess` was seen declining to implement, and, per the correction
+above, a different syscall from the one `RtlCloneUserProcess` actually uses.
+What is confirmed is narrower than "cloning works here": the
+`NtCreateProcessEx` clone path works, completely, for a 32-bit target, with
+whatever WOW64 setup that path does that `RtlCloneUserProcess`'s does not.
+Whether `RtlCloneUserProcess`'s own path -- through `ZwCreateUserProcess` --
+shares that defect, has a different one, or has none at all under different
+handling is exactly as open as it was. What this does rule out is the
+broadest excuse available: "this VM just can't do it." Something here can.
+Whether the thing `__clone_process` calls is that something remains unknown.
+
+One question about `RtlCloneUserProcess`'s own clone can be answered without
+running anything on the side that is broken: is the FS-with-no-base defect a
+property of the one thread the clone hands back, or of the clone process
+itself? Clone with `CREATE_SUSPENDED` and never resume that thread -- so
+neither the lock deadlock nor the FS fault above can happen -- and ask
+`NtQueryInformationProcess(ProcessWow64Information, class 26)` about the
+child's process handle. It answers with a real PEB32 address, not zero and
+not a failing status. So the clone's process-level WOW64 association came
+through intact; what is missing is scoped to the one thread, not the process.
+That keeps open a narrower question than the one above: whether a thread made
+the ordinary way afterwards -- fresh, with `NtCreateThreadEx`, never touching
+the cloned thread at all -- would get the segment setup that thread did not.
+Not yet tried: it needs a start routine that never returns through an
+ordinary call frame, since nothing calls back into it the way M2-Planet's own
+calling convention assumes.
 
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
