@@ -1241,6 +1241,58 @@ int __wow64_selfhandle()
 	return out[0];
 }
 
+/* __wow64_scratch_hi: the discarded half of __qadd64's result, shared by
+ * every call site in this file but one.
+ *
+ * Every offset __qadd64 is ever asked to add here is small and positive --
+ * a struct field, an RVA, a character index -- so it never carries into the
+ * high word, and every caller below except __wow64_resolve_export's own
+ * return already knows that and never reads hi_out back; the comments next
+ * to several of them say so directly ("never carries out of the low word").
+ * A fresh calloc(1,4) per call for a value that is written and never read
+ * is exactly the waste __wow64_rd64_got/_scratch/_v below are the other half
+ * of: the module walk and the export walk between them call __qadd64 for
+ * nearly every dword or word this file reads out of a 64-bit image, which is
+ * thousands of times in one __clone_process_wow64fix() call, and
+ * calloc's own smallest bucket is 256 bytes (M2libc/stdlib.c's malloc rounds
+ * every request up to one of a handful of power-of-two sizes), never freed.
+ * One shared word, reused instead of reallocated, costs that once instead of
+ * every time. __wow64_resolve_export's own tail call passes its real
+ * va_hi_out through unchanged, not this -- that one result is the point of
+ * calling it and has to reach the caller. */
+int __wow64_scratch_hi[1];
+
+/* __wow64_rd64_got / __wow64_rd64_scratch / __wow64_rd64_v: the three
+ * buffers __wow64_rd64 and its two callers used to calloc fresh on every
+ * call. Each is written and read back before the function that owns it
+ * returns and never held onto after -- nothing here is reentrant or
+ * recursive, this whole fix runs straight through on one thread -- so one of
+ * each, allocated the first time and reused after, is exactly as correct as
+ * a fresh calloc every time and, per __wow64_scratch_hi's note above, is the
+ * other half of what a plain fork-many-test.c run (Development/
+ * fork-many-probe.c, kept locally while measuring this) showed: brk()
+ * climbing about 3.4MB per fork() call, all of it these two families of
+ * throwaway buffers, enough to walk this image's fixed 128MB heap section
+ * off the end in under 40 forks. Cached, the same call site allocates three
+ * words total for the life of the process instead of three every single
+ * 64-bit read. */
+int __wow64_rd64_have;
+int* __wow64_rd64_got;
+char* __wow64_rd64_scratch;
+int* __wow64_rd64_v;
+void __wow64_rd64_init()
+{
+	if(0 != __wow64_rd64_have) return;
+	__wow64_rd64_got = __wow64_align16(calloc(8 + 16, 1));
+	/* 8, not len: len is at most 4 everywhere this file calls __wow64_rd64
+	 * (dword or word reads only), and the buffer only has to be as big as
+	 * the largest len ever asked for, same as a fresh calloc(len+16,1)
+	 * would have been for the biggest caller. */
+	__wow64_rd64_scratch = __wow64_align16(calloc(8 + 16, 1));
+	__wow64_rd64_v = calloc(1, 4);
+	__wow64_rd64_have = 1;
+}
+
 /* Read len bytes (at most 8, everything this file asks for) from the 64-bit
  * address (lo, hi) of this same process's own 64-bit view, into buf, which
  * the caller owns and which need only be as big as len. Returns the NTSTATUS
@@ -1256,14 +1308,13 @@ int __wow64_rd64(int lo, int hi, int* buf, int len)
 	int i;
 
 	self = __wow64_selfhandle();
-	got = calloc(8 + 16, 1);
-	got = __wow64_align16(got);
+	__wow64_rd64_init();
+	got = __wow64_rd64_got;
 	/* NumberOfBytesRead is PULONG64 in the real signature, not plain ULONG,
 	 * so it gets the same treatment as the Buffer below rather than being
 	 * left as the caller-owned buf-sized pointer __inheritable-style calls
 	 * would use. */
-	scratch = calloc(len + 16, 1);
-	scratch = __wow64_align16(scratch);
+	scratch = __wow64_rd64_scratch;
 	NtWow64ReadVirtualMemory64 = __ntdll(NT_WOW64READVM);
 	/* forwards: NtWow64ReadVirtualMemory64(self, lo, hi, scratch, len, 0, got) --
 	 * everything read here is this process's own 64-bit view of itself, but
@@ -1290,7 +1341,8 @@ int __wow64_rd64_dword(int lo, int hi)
 {
 	int* v;
 
-	v = calloc(1, 4);
+	__wow64_rd64_init();
+	v = __wow64_rd64_v;
 	__wow64_rd64(lo, hi, v, 4);
 	return v[0];
 }
@@ -1299,7 +1351,8 @@ int __wow64_rd64_word(int lo, int hi)
 {
 	int* v;
 
-	v = calloc(1, 4);
+	__wow64_rd64_init();
+	v = __wow64_rd64_v;
 	__wow64_rd64(lo, hi, v, 2);
 	return 65535 & v[0];
 }
@@ -1332,14 +1385,14 @@ int __wow64_find_module(int peb_lo, int peb_hi, char* want, int* base_hi_out)
 	 * word (a PEB address is never within 24 bytes of the top of the
 	 * address space), so the hi word of that intermediate address is the
 	 * PEB's own hi word, unchanged. */
-	pebldr_lo = __qadd64(peb_lo, peb_hi, 0x18, calloc(1,4));
+	pebldr_lo = __qadd64(peb_lo, peb_hi, 0x18, __wow64_scratch_hi);
 	pebldr_hi = peb_hi;
 	ldr_lo = __wow64_rd64_dword(pebldr_lo, pebldr_hi);
-	ldr_hi = __wow64_rd64_dword(__qadd64(pebldr_lo, pebldr_hi, 4, calloc(1,4)), pebldr_hi);
-	head_lo = __qadd64(ldr_lo, ldr_hi, 16, calloc(1,4));
+	ldr_hi = __wow64_rd64_dword(__qadd64(pebldr_lo, pebldr_hi, 4, __wow64_scratch_hi), pebldr_hi);
+	head_lo = __qadd64(ldr_lo, ldr_hi, 16, __wow64_scratch_hi);
 	head_hi = ldr_hi;         /* +0x10 never carries out of the low word either */
 	cur_lo = __wow64_rd64_dword(head_lo, head_hi);
-	cur_hi = __wow64_rd64_dword(__qadd64(head_lo, head_hi, 4, calloc(1,4)), head_hi);
+	cur_hi = __wow64_rd64_dword(__qadd64(head_lo, head_hi, 4, __wow64_scratch_hi), head_hi);
 
 	guard = 0;
 	while(guard < 512)
@@ -1350,18 +1403,18 @@ int __wow64_find_module(int peb_lo, int peb_hi, char* want, int* base_hi_out)
 		}
 		if((0 == cur_lo) && (0 == cur_hi)) break;
 
-		base_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x30, calloc(1,4)), cur_hi);
-		base_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x34, calloc(1,4)), cur_hi);
-		name_len = __wow64_rd64_word(__qadd64(cur_lo, cur_hi, 0x58, calloc(1,4)), cur_hi);
-		name_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x60, calloc(1,4)), cur_hi);
-		name_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x64, calloc(1,4)), cur_hi);
+		base_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x30, __wow64_scratch_hi), cur_hi);
+		base_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x34, __wow64_scratch_hi), cur_hi);
+		name_len = __wow64_rd64_word(__qadd64(cur_lo, cur_hi, 0x58, __wow64_scratch_hi), cur_hi);
+		name_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x60, __wow64_scratch_hi), cur_hi);
+		name_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x64, __wow64_scratch_hi), cur_hi);
 
 		match = 1;
 		i = 0;
 		while(0 != want[i])
 		{
 			if((2 * i) >= name_len) { match = 0; break; }
-			wc = __wow64_rd64_word(__qadd64(name_lo, name_hi, 2 * i, calloc(1,4)), name_hi);
+			wc = __wow64_rd64_word(__qadd64(name_lo, name_hi, 2 * i, __wow64_scratch_hi), name_hi);
 			if(wc != want[i]) { match = 0; break; }
 			i = i + 1;
 		}
@@ -1379,7 +1432,7 @@ int __wow64_find_module(int peb_lo, int peb_hi, char* want, int* base_hi_out)
 		 * of cur_lo/cur_hi is overwritten -- reusing the just-updated low
 		 * word to address the high word would read the wrong place. */
 		next_lo = __wow64_rd64_dword(cur_lo, cur_hi);
-		next_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 4, calloc(1,4)), cur_hi);
+		next_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 4, __wow64_scratch_hi), cur_hi);
 		cur_lo = next_lo;
 		cur_hi = next_hi;
 		guard = guard + 1;
@@ -1413,34 +1466,34 @@ int __wow64_resolve_export(int base_lo, int base_hi, char* name, int* va_hi_out)
 	int ord;
 	int func_rva;
 
-	e_lfanew = __wow64_rd64_dword(__qadd64(base_lo, base_hi, 0x3C, calloc(1,4)), base_hi);
-	nt_lo = __qadd64(base_lo, base_hi, e_lfanew, calloc(1,4));
+	e_lfanew = __wow64_rd64_dword(__qadd64(base_lo, base_hi, 0x3C, __wow64_scratch_hi), base_hi);
+	nt_lo = __qadd64(base_lo, base_hi, e_lfanew, __wow64_scratch_hi);
 	nt_hi = base_hi;
-	export_rva = __wow64_rd64_dword(__qadd64(nt_lo, nt_hi, 0x88, calloc(1,4)), nt_hi);
-	num_names  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 24, calloc(1,4)), base_hi);
-	addr_funcs = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 28, calloc(1,4)), base_hi);
-	addr_names = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 32, calloc(1,4)), base_hi);
-	addr_ords  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 36, calloc(1,4)), base_hi);
+	export_rva = __wow64_rd64_dword(__qadd64(nt_lo, nt_hi, 0x88, __wow64_scratch_hi), nt_hi);
+	num_names  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 24, __wow64_scratch_hi), base_hi);
+	addr_funcs = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 28, __wow64_scratch_hi), base_hi);
+	addr_names = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 32, __wow64_scratch_hi), base_hi);
+	addr_ords  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 36, __wow64_scratch_hi), base_hi);
 
 	i = 0;
 	while(i < num_names)
 	{
-		name_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_names + (4 * i), calloc(1,4)), base_hi);
+		name_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_names + (4 * i), __wow64_scratch_hi), base_hi);
 		match = 1;
 		j = 0;
 		while(0 != name[j])
 		{
-			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, calloc(1,4)), base_hi);
+			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, __wow64_scratch_hi), base_hi);
 			if((255 & ch) != name[j]) { match = 0; break; }
 			j = j + 1;
 		}
 		if(match)
 		{
-			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, calloc(1,4)), base_hi);
+			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, __wow64_scratch_hi), base_hi);
 			if(0 == (255 & ch))
 			{
-				ord = __wow64_rd64_word(__qadd64(base_lo, base_hi, addr_ords + (2 * i), calloc(1,4)), base_hi);
-				func_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_funcs + (4 * ord), calloc(1,4)), base_hi);
+				ord = __wow64_rd64_word(__qadd64(base_lo, base_hi, addr_ords + (2 * i), __wow64_scratch_hi), base_hi);
+				func_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_funcs + (4 * ord), __wow64_scratch_hi), base_hi);
 				va_hi_out[0] = base_hi;
 				return __qadd64(base_lo, base_hi, func_rva, va_hi_out);
 			}
@@ -1460,7 +1513,18 @@ int __wow64_resolve_export(int base_lo, int base_hi, char* name, int* va_hi_out)
  * machine code either way): 0x000 a 32-bit entry stub; 0x040 a data area of
  * six 8-byte slots (Target, Arg1..Arg4, Result -- Arg5 unused here); 0x0C0 the
  * 64-bit payload; 0x120 a 32-bit return stub. calloc already zeroes the page,
- * so only the 89 non-zero bytes out of 289 are written here. */
+ * so only the 89 non-zero bytes out of 289 are written here.
+ *
+ * Cached in a global the same way __wow64_selfhandle above caches its handle:
+ * the trampoline bytes below never change from one call to the next, so
+ * there is nothing a second call would do differently. Before this, every
+ * fork() -- every call to __clone_process_wow64fix -- allocated a fresh
+ * PAGE_EXECUTE_READWRITE page here and never freed or reused it: a real
+ * 4KB-of-committed-executable-memory leak, forever, once per fork(). Small
+ * next to the multi-megabyte-per-call waste __wow64_rd64_got/_scratch/_v
+ * above were, but real on its own and fixed the same way. */
+int __gate_have;
+int __gate_cache;
 int __gate_init()
 {
 	int (*NtAllocateVirtualMemory)(int, int, int, int, int, int);
@@ -1468,6 +1532,8 @@ int __gate_init()
 	int* base;
 	int* size;
 	int rc;
+
+	if(0 != __gate_have) return __gate_cache;
 
 	base = calloc(1, 4);
 	size = calloc(1, 4);
@@ -1504,6 +1570,8 @@ int __gate_init()
 	g[0x10a] = 35; g[0x10b] = 80; g[0x10c] = 72; g[0x10d] = 203;
 	g[0x120] = 195;
 
+	__gate_cache = base[0];
+	__gate_have = 1;
 	return base[0];
 }
 
