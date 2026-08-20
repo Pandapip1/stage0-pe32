@@ -58,6 +58,11 @@ NTDLL = [
     ("fn_resume",     "NtResumeThread",               "__spawn: a new process starts suspended"),
     ("fn_alloc",      "NtAllocateVirtualMemory",      "a real brk, for a program too big to live inside the image"),
     ("fn_clone",      "RtlCloneUserProcess",          "fork; absent on wine, where the slot stays 0"),
+    ("fn_getcontext", "NtGetContextThread",           "fork: the context a suspended child would start with"),
+    ("fn_setcontext", "NtSetContextThread",           "fork: point that child at where its parent was instead"),
+    ("fn_writevm",    "NtWriteVirtualMemory",         "fork: copy this process's memory into that child"),
+    ("fn_readvm",     "NtReadVirtualMemory",          "fork: watch for the child to say it has parked"),
+    ("fn_suspend",    "NtSuspendThread",              "fork: stop that child before overwriting it"),
 ]
 
 def emit_shared(a):

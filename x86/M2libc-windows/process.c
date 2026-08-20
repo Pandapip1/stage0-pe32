@@ -6,6 +6,8 @@
  *
  * Starting another program, and waiting for it.
  *
+ * fork works here, and not by any of the means Windows offers for it.
+ *
  * Windows really does have a fork primitive, and it really does not work.
  * There are four ways in, and all four were measured on Windows 11 22621:
  *
@@ -39,15 +41,27 @@
  * meant to return in both processes, telling the child which it is by handing
  * it STATUS_PROCESS_CLONED where the parent gets STATUS_SUCCESS.
  * __clone_process below is that call, and what it does on Windows 11 is
- * written up there.  fork returns -1, because a fork whose child never runs
- * is worse than no fork at all.
+ * written up there.  It is kept, and not called.
  *
- * So three steps rather than four, and a caller wanting a child says __spawn
- * and waitpid where it would have said fork and execve:
+ * What fork does instead is start this same program again and overwrite the
+ * copy with this one: the way Cygwin has always done it, and possible here
+ * for a reason particular to this bootstrap, which is that its image is at a
+ * fixed address with everything -- code, globals, heap, even the stack the
+ * kernel hands out -- laid out identically in every process that runs it.  So
+ * one copy's memory means the same thing in another copy, and no fixups are
+ * needed at all.  The whole of it is written up at fork below.
  *
+ * So four calls, and a caller wanting a child may say either what POSIX says
+ * or the shorter thing Windows can do directly:
+ *
+ *   fork()                     twice-returning, 0 in the child
  *   __spawn(path, argv, envp)  start a program; a handle to it comes back
  *   waitpid(pid, &status, 0)   wait for one of those to finish
  *   execve(path, argv, envp)   __spawn and waitpid, and then exit as it did
+ *
+ * fork and execve together do what fork and exec do anywhere.  __spawn is the
+ * cheaper way to say the same thing when the child is only ever going to
+ * exec: it is one process where fork plus execve is two.
  *
  * A pid here is the process handle, the same way a file descriptor elsewhere
  * in this port is a file handle.  execve does not replace the running image --
@@ -59,7 +73,8 @@
  *
  *   pid = fork(); if(0 == pid) execve(f, argv, envp); else waitpid(pid, &s, 0);
  *
- * says this instead, which is two lines and no fork:
+ * now works as written, and may still say this instead, which is two lines
+ * and one process rather than two:
  *
  *   pid = __spawn(f, argv, envp); waitpid(pid, &s, 0);
  *
@@ -323,11 +338,18 @@ int __inheritable(int handle)
  * writes wherever this one does.  RtlCreateUserProcess then makes the process
  * from the image named by an NT path, with the initial thread suspended,
  * which is why nothing runs until NtResumeThread. */
-int __spawn(char* file_name, char** argv, char** envp)
+/* __spawn, up to but not including letting the child go.
+ *
+ * A process Windows has created is suspended until something resumes its one
+ * thread, and fork wants that gap: it has a whole address space to copy in and
+ * a thread to point somewhere else before the child may run a single
+ * instruction.  __spawn is this and then a resume; fork is this and then a
+ * great deal more.  info comes back filled in -- Process at [1], Thread at
+ * [2] -- and is the caller's to resume. */
+int __spawn_suspended(char* file_name, char** argv, char** envp, int* info)
 {
 	int (*RtlCreateProcessParameters)(int, int, int, int, int, int, int, int, int, int);
 	int (*RtlCreateUserProcess)(int, int, int, int, int, int, int, int, int, int);
-	int (*NtResumeThread)(int, int);
 	int* oa;
 	int* ntpath;
 	int* image;
@@ -336,10 +358,8 @@ int __spawn(char* file_name, char** argv, char** envp)
 	char* env;
 	int* out;
 	int* params;
-	int* info;
 	int* slot;
 	int h;
-	int thread;
 	int rc;
 
 	oa = __ntobject(file_name);
@@ -380,11 +400,6 @@ int __spawn(char* file_name, char** argv, char** envp)
 	 * before the child's first instruction.  See the head of this file. */
 	params[26] = 256;
 
-	/* RTL_USER_PROCESS_INFORMATION: Length, Process, Thread, a CLIENT_ID and
-	 * a SECTION_IMAGE_INFORMATION, which is 68 bytes altogether.  The room is
-	 * larger than that because only the first three words are read here and
-	 * the cost of being generous is nothing. */
-	info = calloc(32, 4);
 	info[0] = 68;
 
 	RtlCreateUserProcess = __ntdll(NT_CREATEPROC);
@@ -393,12 +408,32 @@ int __spawn(char* file_name, char** argv, char** envp)
 	rc = RtlCreateUserProcess(info, 0, 0, 1, 0, 0, 0, params, 0x40, ntpath);
 	if(0 != rc) return -1;
 
+	return info[1];
+}
+
+int __spawn(char* file_name, char** argv, char** envp)
+{
+	int (*NtResumeThread)(int, int);
+	int* info;
+	int thread;
+	int pid;
+
+	/* RTL_USER_PROCESS_INFORMATION: Length, Process, Thread, a CLIENT_ID and
+	 * a SECTION_IMAGE_INFORMATION, which is 68 bytes altogether.  The room is
+	 * larger than that because only the first three words are read here and
+	 * the cost of being generous is nothing. */
+	info = calloc(32, 4);
+	info[0] = 68;
+
+	pid = __spawn_suspended(file_name, argv, envp, info);
+	if(0 >= pid) return -1;
+
 	NtResumeThread = __ntdll(NT_RESUME);
 	thread = info[2];
 	/* forwards: NtResumeThread(thread, NULL) */
 	NtResumeThread(0, thread);
 
-	return info[1];
+	return pid;
 }
 
 /* Wait for one of those to finish.  options is accepted and ignored: WNOHANG
@@ -453,9 +488,14 @@ int execve(char* file_name, char** argv, char** envp)
 
 /* What fork would be, if the clone's child ever came back.
  *
- * Kept, and not called, because the knowledge is worth more than the code and
- * because a system where this works would get a real fork for free.  What was
- * measured on Windows 11 22621, from this and independently from elsewhere:
+ * Kept, and not called.  fork does work now -- see fork below -- but by
+ * copying one process into another rather than by asking Windows to clone
+ * anything, and everything in this note is still true of the thing Windows
+ * actually offers.  It is worth keeping for two reasons: a system where the
+ * clone worked would get a cheaper fork than the one below for free, and the
+ * measurements cost enough to find that throwing them away would be a waste.
+ * What was measured on Windows 11 22621, from this and independently from
+ * elsewhere:
  *
  *   The parent gets STATUS_SUCCESS and a genuine cloned process -- tasklist
  *   shows two, and NtQueryInformationProcess reports the child as
@@ -704,10 +744,11 @@ int execve(char* file_name, char** argv, char** envp)
  *   record.  That is not understood either, and a conclusion built on top of
  *   it would not be worth having.
  *
- *   So: fork stops here, at an FS with no base, for a reason not yet pinned
- *   on either Windows or this code.  Whichever it is, nothing in reach fixes
- *   it from user mode -- a segment base lives in a descriptor the kernel owns,
- *   and the SegFs in a 32-bit CONTEXT is the selector, which is already right.
+ *   So: the clone stops here, at an FS with no base, for a reason not yet
+ *   pinned on either Windows or this code.  Whichever it is, nothing in
+ *   reach fixes it from user mode -- a segment base lives in a descriptor the
+ *   kernel owns, and the SegFs in a 32-bit CONTEXT is the selector, which is
+ *   already right.
  *
  *   The r15 finding above does not depend on any of this.  That one was
  *   measured with no clone anywhere near it, and it stands on its own.
@@ -894,12 +935,311 @@ int __clone_process()
 	return info[1];                  /* and the parent gets a handle to it */
 }
 
-/* Windows has the primitive and the primitive does not work; see
- * __clone_process.  Failing here is deliberate: a fork whose parent gets a
- * child handle and whose child never runs would hang the first caller to wait
- * for it, which is worse than a fork that says it cannot. */
+/* This process's own image path, out of the PEB, narrowed the way everything
+ * else in this port narrows.  fork needs it because the only way to get a
+ * child with a working address space is to start this same program again. */
+char* __self_path()
+{
+	int* slot;
+	int* pp;
+	char* wide;
+	char* out;
+	int addr;
+	int n;
+	int i;
+
+	/* __stdslot(0) is &ProcessParameters->StandardInput, at 0x18 into the
+	 * block, so 24 bytes back is the block itself -- counted in bytes, as a
+	 * plain integer, because this dialect does not scale pointer arithmetic
+	 * and quietly gives the wrong address if asked to.  ImagePathName is the
+	 * UNICODE_STRING at 0x38 and its Buffer is at 0x3c, which is word 15. */
+	slot = __stdslot(0);
+	addr = slot;
+	addr = addr - 24;
+	pp = addr;
+	wide = pp[15];
+	if(NULL == wide) return NULL;
+
+	n = 0;
+	while(0 != wide[2 * n]) n = n + 1;
+
+	out = calloc(n + 1, 1);
+	i = 0;
+	while(i < n)
+	{
+		out[i] = wide[2 * i];
+		i = i + 1;
+	}
+	out[n] = 0;
+	return out;
+}
+
+/* One span of this process's memory, written into another process.  fork
+ * calls this with src and dst the same number, which is the whole trick: see
+ * below. */
+int __fork_write(int proc, int dst, int src, int len)
+{
+	int (*NtWriteVirtualMemory)(int, int, int, int, int);
+	int* wrote;
+	int rc;
+
+	if(0 >= len) return 0;
+	wrote = calloc(1, 4);
+	NtWriteVirtualMemory = __ntdll(NT_WRITEVM);
+	/* forwards: NtWriteVirtualMemory(proc, dst, src, len, wrote) */
+	rc = NtWriteVirtualMemory(wrote, len, src, dst, proc);
+	return rc;
+}
+
+/* One word out of another process. */
+int __fork_peek(int proc, int addr, int* out)
+{
+	int (*NtReadVirtualMemory)(int, int, int, int, int);
+	int* got;
+	int rc;
+
+	got = calloc(1, 4);
+	NtReadVirtualMemory = __ntdll(NT_READVM);
+	/* forwards: NtReadVirtualMemory(proc, addr, out, 4, got) */
+	rc = NtReadVirtualMemory(got, 4, out, addr, proc);
+	return rc;
+}
+
+/* fork, by starting this program again and then overwriting the copy.
+ *
+ * Windows has a fork primitive and it does not work; the whole of why is
+ * written up at __clone_process, and none of it is fixable from user mode.
+ * What is left is the way Cygwin has always done it, and it works here for a
+ * reason particular to this bootstrap rather than to Cygwin's cleverness.
+ *
+ * The reason is that every program this chain builds is one section at a fixed
+ * address.  x86/PE32-i386.hex2 sets IMAGE_FILE_RELOCS_STRIPPED and does not
+ * set DYNAMIC_BASE, so there is no relocation and no address-space layout
+ * randomisation: the image is at 0x400000 in every process that runs it, it
+ * runs to 128MB with code, data and heap all inside it and all writable, and
+ * even the stack the kernel hands out lands at the same address every time.
+ * So a second copy of this same program is laid out identically to the first,
+ * and copying memory from one into the other needs no fixups of any kind -- a
+ * pointer means the same thing on both sides, because it points at the same
+ * offset of the same image mapped at the same place.  A program built the
+ * ordinary way, relocatable and randomised, could not do this.  This one can
+ * only do it.
+ *
+ * That the stacks coincide is what makes the child's locals and its whole
+ * chain of callers real without a single fixup, and it is also the one thing
+ * that has to be worked around: the child has its own loader init to run, on
+ * that same stack, before it can be trusted with anything.  So the child is
+ * made to run all of its own startup first and then stop dead:
+ *
+ *   __fork_setjmp writes down where the caller would have carried on.
+ *   The same program is started again, suspended -- a process Windows made in
+ *     the ordinary way, so its thread has everything the clone's never had:
+ *     an FS base the kernel programmed, the WOW64 registers its own bring-up
+ *     will set, a stack, a PEB.
+ *   Before letting it go, one word is written into it: the flag _start reads
+ *     to learn it is a fork child.  It is the only thing that distinguishes
+ *     this child from an ordinary run of the same program.
+ *   It is let go, does its loader init, resolves ntdll, sets up the C library,
+ *     and then parks in a spin rather than calling main, saying so in a second
+ *     word the parent watches.  Its startup is over and its stack is finished
+ *     with.
+ *   It is suspended, and everything from the image base to the top of the heap
+ *     is copied into it -- every global and every byte malloc has handed out,
+ *     at the addresses they already have -- and then the parent's committed
+ *     stack, at its own address, over the top of the child's spent one.
+ *   Its thread is pointed at what __fork_setjmp wrote down, with EAX set to 1,
+ *     and let go.
+ *
+ * It comes up believing it has just returned from __fork_setjmp, on its
+ * parent's stack, with its parent's memory, and returns 0 from here.  The
+ * parent gets the child's process handle, which is what this port calls a pid.
+ *
+ * What this leans on, and what would break it:
+ *
+ *   ntdll is at one address for a whole boot, shared by every process, so the
+ *   routine addresses resolve_all found in the parent are the same numbers in
+ *   the child.  The child resolves them again anyway, before it parks, and is
+ *   then given the parent's copies on top; the two agree.
+ *
+ *   Nothing here copies handles beyond the three standard ones __spawn already
+ *   duplicates, so a file the parent had open is not open in the child.  A
+ *   real fork would; this does not, and a caller wanting that would have to
+ *   say so.
+ *
+ *   The child is a second process, so it has its own pid and its own parent as
+ *   far as Windows is concerned.  Nothing that asks Windows rather than this
+ *   library will see a fork.
+ *
+ * fork's children are not waited for here.  waitpid takes what this returns. */
 int fork()
 {
-	return -1;
+	int (*NtGetContextThread)(int, int);
+	int (*NtSetContextThread)(int, int);
+	int (*NtResumeThread)(int, int);
+	int (*NtSuspendThread)(int, int);
+	int (*NtTerminateProcess)(int, int);
+	char* path;
+	char** argv;
+	int* info;
+	int* teb;
+	int* ctx;
+	int* one;
+	int* seen;
+	int ctx_raw;
+	int stack_low;
+	int stack_high;
+	int stack_len;
+	int heap_top;
+	int child;
+	int thread;
+	int flag_at;
+	int parked_at;
+	int spins;
+	int rc;
+	int i;
+
+	/* Where fork returns to, written down before there is a child to send
+	 * there.  Nothing comes back into fork on the child's side: the child is
+	 * started in fork's caller, with fork already returned and 0 in EAX. */
+	__fork_setjmp();
+
+	path = __self_path();
+	if(NULL == path) return -1;
+
+	argv = calloc(2, 4);
+	argv[0] = path;
+	argv[1] = NULL;
+
+	info = calloc(32, 4);
+	child = __spawn_suspended(path, argv, NULL, info);
+	if(0 >= child) return -1;
+	thread = info[2];
+
+	NtTerminateProcess = __ntdll(NT_EXIT);
+	NtResumeThread = __ntdll(NT_RESUME);
+
+	/* Tell it what it is, before it has run an instruction. */
+	one = calloc(1, 4);
+	one[0] = 1;
+	flag_at = __fork_flagaddr();
+	rc = __fork_write(child, flag_at, one, 4);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* Let it run its own startup, all the way to the spin in _start. */
+	NtResumeThread(0, thread);
+
+	parked_at = __fork_parkedaddr();
+	seen = calloc(1, 4);
+	seen[0] = 0;
+	spins = 0;
+	while(0 == seen[0])
+	{
+		rc = __fork_peek(child, parked_at, seen);
+		if(0 != rc)
+		{
+			NtTerminateProcess(1, child);
+			return -1;
+		}
+		spins = spins + 1;
+		if(spins > 100000000)
+		{
+			/* It should take microseconds.  Something is wrong. */
+			NtTerminateProcess(1, child);
+			return -1;
+		}
+	}
+
+	/* Parked.  Stop it before touching anything it is standing on. */
+	NtSuspendThread = __ntdll(NT_SUSPEND);
+	/* forwards: NtSuspendThread(thread, NULL) */
+	rc = NtSuspendThread(0, thread);
+	if(0 > rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* CONTEXT is 0x2cc bytes and the kernel insists on 16-byte alignment. */
+	ctx_raw = calloc(0x2CC + 16, 1);
+	ctx_raw = ctx_raw + 15;
+	ctx_raw = ctx_raw - (ctx_raw % 16);
+	ctx = ctx_raw;
+	i = 0;
+	while(i < 179)
+	{
+		ctx[i] = 0;
+		i = i + 1;
+	}
+	ctx[0] = 0x10007;                     /* CONTEXT_FULL */
+
+	NtGetContextThread = __ntdll(NT_GETCONTEXT);
+	/* forwards: NtGetContextThread(thread, ctx) */
+	rc = NtGetContextThread(ctx, thread);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* This thread's committed stack, which is what the child has to be given
+	 * a copy of.  StackBase and StackLimit are at 0x04 and 0x08 in the TEB;
+	 * the stack grows down, so StackLimit is the low end. */
+	teb = __teb();
+	stack_high = teb[1];
+	stack_low = teb[2];
+	stack_len = stack_high - stack_low;
+	if(0 >= stack_len)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* Everything this program has: the one section, from where it starts to
+	 * the top of the heap -- code, globals and every byte malloc has handed
+	 * out.  The copy starts at 0x401000 rather than at the image base
+	 * because the page below that is the PE header, which the loader maps
+	 * read-only; writing there answers STATUS_PARTIAL_COPY and there is
+	 * nothing in it that differs between two runs of one program anyway. */
+	heap_top = brk(0);
+	rc = __fork_write(child, 0x401000, 0x401000, heap_top - 0x401000);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	rc = __fork_write(child, stack_low, stack_low, stack_len);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* Point it at what __fork_setjmp wrote down.  Everything else in the
+	 * context is left exactly as Windows built it -- the segment registers
+	 * above all, which is the whole difference between this and the clone. */
+
+	ctx[46] = __fork_geteip();            /* where fork returns to */
+	ctx[49] = __fork_getesp();            /* on its caller's stack */
+	ctx[44] = 0;                          /* EAX: and fork returned 0 */
+
+	NtSetContextThread = __ntdll(NT_SETCONTEXT);
+	/* forwards: NtSetContextThread(thread, ctx) */
+	rc = NtSetContextThread(ctx, thread);
+	if(0 != rc)
+	{
+		NtTerminateProcess(1, child);
+		return -1;
+	}
+
+	/* Suspended twice: once by us just now, once by the spin it was in.  Let
+	 * it go the once; it was resumed out of its creation suspend already. */
+	NtResumeThread(0, thread);
+
+	return child;
 }
 #endif

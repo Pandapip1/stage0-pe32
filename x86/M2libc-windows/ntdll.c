@@ -69,6 +69,47 @@ void* __ntdll(int slot)
 	    "call %__ntdll");
 }
 
+/* This thread's TEB, which is the only way to reach StackBase and StackLimit
+ * -- the committed stack fork has to copy into a child. */
+int* __teb()
+{
+	asm("call %__teb");
+}
+
+/* setjmp, in the one shape fork needs: it writes down where its caller would
+ * have carried on and returns 0, and a thread pointed back at that spot with
+ * EAX set to 1 comes up believing it returned 1.  See fork in process.c and
+ * :__fork_setjmp in x86/libc-core.M1. */
+int __fork_setjmp()
+{
+	asm("call %__fork_setjmp");
+}
+
+int __fork_exitaddr()
+{
+	asm("call %__fork_exitaddr");
+}
+
+int __fork_flagaddr()
+{
+	asm("call %__fork_flagaddr");
+}
+
+int __fork_parkedaddr()
+{
+	asm("call %__fork_parkedaddr");
+}
+
+int __fork_geteip()
+{
+	asm("call %__fork_geteip");
+}
+
+int __fork_getesp()
+{
+	asm("call %__fork_getesp");
+}
+
 /* Where one of the three standard handles lives in the process parameters, so
  * that dup2 can replace it and not merely read it. */
 int* __stdslot(int n)

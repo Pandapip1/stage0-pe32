@@ -409,6 +409,26 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_clone                ; mov [fn_clone], eax
+	68 &name_NtGetContextThread ; push name_NtGetContextThread
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_getcontext           ; mov [fn_getcontext], eax
+	68 &name_NtSetContextThread ; push name_NtSetContextThread
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_setcontext           ; mov [fn_setcontext], eax
+	68 &name_NtWriteVirtualMemory ; push name_NtWriteVirtualMemory
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_writevm              ; mov [fn_writevm], eax
+	68 &name_NtReadVirtualMemory ; push name_NtReadVirtualMemory
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_readvm               ; mov [fn_readvm], eax
+	68 &name_NtSuspendThread    ; push name_NtSuspendThread
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_suspend              ; mov [fn_suspend], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -515,6 +535,21 @@
 :name_RtlCloneUserProcess
 52 74 6C 43 6C 6F 6E 65 55 73 65 72 50 72 6F 63 65 73 73 00 # name_RtlCloneUserProcess = "RtlCloneUserProcess"
 
+:name_NtGetContextThread
+4E 74 47 65 74 43 6F 6E 74 65 78 74 54 68 72 65 61 64 00 # name_NtGetContextThread = "NtGetContextThread"
+
+:name_NtSetContextThread
+4E 74 53 65 74 43 6F 6E 74 65 78 74 54 68 72 65 61 64 00 # name_NtSetContextThread = "NtSetContextThread"
+
+:name_NtWriteVirtualMemory
+4E 74 57 72 69 74 65 56 69 72 74 75 61 6C 4D 65 6D 6F 72 79 00 # name_NtWriteVirtualMemory = "NtWriteVirtualMemory"
+
+:name_NtReadVirtualMemory
+4E 74 52 65 61 64 56 69 72 74 75 61 6C 4D 65 6D 6F 72 79 00 # name_NtReadVirtualMemory = "NtReadVirtualMemory"
+
+:name_NtSuspendThread
+4E 74 53 75 73 70 65 6E 64 54 68 72 65 61 64 00 # name_NtSuspendThread = "NtSuspendThread"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
@@ -589,6 +624,21 @@
 
 :fn_clone
 00 00 00 00                     # fn_clone: slot 23, resolved RtlCloneUserProcess -- fork; absent on wine, where the slot stays 0
+
+:fn_getcontext
+00 00 00 00                     # fn_getcontext: slot 24, resolved NtGetContextThread -- fork: the context a suspended child would start with
+
+:fn_setcontext
+00 00 00 00                     # fn_setcontext: slot 25, resolved NtSetContextThread -- fork: point that child at where its parent was instead
+
+:fn_writevm
+00 00 00 00                     # fn_writevm: slot 26, resolved NtWriteVirtualMemory -- fork: copy this process's memory into that child
+
+:fn_readvm
+00 00 00 00                     # fn_readvm: slot 27, resolved NtReadVirtualMemory -- fork: watch for the child to say it has parked
+
+:fn_suspend
+00 00 00 00                     # fn_suspend: slot 28, resolved NtSuspendThread -- fork: stop that child before overwriting it
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access

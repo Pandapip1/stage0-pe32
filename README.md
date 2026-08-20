@@ -199,8 +199,56 @@ jumps to zero with nothing to say where it came from. That cost three
 debugging rounds in one sitting, so `x86/Development/check_fnptr_args.py`
 fails on one now, and is checked against all three.
 
-`x86/M2libc-windows/process.c` is starting another program and waiting for it,
-and it is the one place this port cannot keep the POSIX shape.
+`x86/M2libc-windows/process.c` is starting another program and waiting for it.
+
+`fork` works here, and not by any of the means Windows offers for it. Windows'
+own fork primitive does not work at all, for reasons worth writing down and
+written down below; what `fork` does instead is start this same program again
+and overwrite the copy with this one. That is how Cygwin has always done it,
+and it is possible here for a reason particular to this bootstrap:
+
+`x86/PE32-i386.hex2` sets `IMAGE_FILE_RELOCS_STRIPPED` and does not set
+`DYNAMIC_BASE`, so there is no relocation and no address-space layout
+randomisation. The image is at `0x400000` in every process that runs it, it
+runs to 128MB with code, globals and heap all inside it and all writable, and
+even the stack the kernel hands out lands at the same address every time. So a
+second copy of the same program is laid out identically to the first, and
+copying memory from one into the other needs no fixups of any kind -- a pointer
+means the same thing on both sides. A program built the ordinary way,
+relocatable and randomised, could not do this. This one can only do it.
+
+The awkward part is that the child has its own loader init to run, on that same
+stack, before it can be trusted with anything -- so it is made to run all of its
+own startup first and then stop dead. `_start` reads one word: a flag the parent
+writes into it before letting it go, which is the only thing distinguishing a
+fork child from an ordinary run. Seeing it set, the child does its loader init,
+resolves ntdll, sets up the C library, and then parks in a spin instead of
+calling `main`, saying so in a second word the parent watches. Its startup is
+over and its stack is finished with. The parent suspends it, copies the image
+from `0x401000` to the top of the heap and then its own committed stack over the
+child's spent one, points the child's thread at where `fork` was going to return
+with `0` in `EAX`, and lets it go. It comes up believing `fork` has just
+returned 0, on its parent's stack, with its parent's memory.
+
+Two details, because both cost a debugging round. The copy starts at
+`0x401000` rather than the image base, because the page below is the PE header,
+which the loader maps read-only; writing there answers `STATUS_PARTIAL_COPY`.
+And the child is aimed at `fork`'s *caller*, not back into `fork` -- this
+dialect begins every function with `mov_esi,esp`, so `[ESI]` is where `fork`
+returns to and `ESI+4` is the stack its caller will have, and that frame is
+above everything `fork`'s own later calls reuse. Aiming into `fork`'s middle
+resumes onto slots the spawn and the copies have long since overwritten.
+
+What it does not do: no handles beyond the three standard ones cross over, so a
+file the parent had open is not open in the child; and the child is a second
+process as far as Windows is concerned, with its own pid and its own parent, so
+nothing that asks Windows rather than this library will see a fork.
+
+`x86/Development/fork-test.c` exercises it -- a local, something malloc handed
+out, the child's output landing in the parent's stream, `waitpid` bringing back
+what the child exited with, and `fork` with `execve` after it.
+
+## Windows' own fork primitive, and why it is not used
 
 Windows does have a fork primitive. `NtCreateProcessEx` given a parent and no
 section handle clones the parent's address space instead of mapping an image --
@@ -598,15 +646,22 @@ objection is. A native x86_64 program has no WOW64 layer -- `syscall` for system
 calls, and its TEB through `GS`, whose base the kernel programs for every thread
 -- so the question is worth asking again, from scratch, in an x86_64 port.
 
-`__clone_process` keeps the call and the measurements; `fork` returns -1,
-because a fork whose child never runs would hang the first caller to wait for
-it.
+`__clone_process` keeps the call and the measurements, and is not called. A
+system where the clone worked would get a cheaper fork than the one above for
+free, so the measurements are worth keeping even now that they are not on the
+path anything takes.
 
-So the three steps of fork-exec-wait, taken apart into ones Windows can do:
+So four calls, and a caller wanting a child may say either what POSIX says or
+the shorter thing Windows can do directly:
 
+    fork()                      twice-returning, 0 in the child
     __spawn(path, argv, envp)   start a program; a handle to it comes back
     waitpid(pid, &status, 0)    wait for one of those to finish
     execve(path, argv, envp)    both of the above, and then exit as it did
+
+`fork` and `execve` together do what fork and exec do anywhere. `__spawn` is
+the cheaper way to say the same thing when the child is only ever going to
+exec: one process where fork plus execve is two.
 
 A pid is the process handle, the way a file descriptor is a file handle.
 `execve` does not replace the running image, because nothing on Windows can,

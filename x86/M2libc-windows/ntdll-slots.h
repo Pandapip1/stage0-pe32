@@ -38,5 +38,10 @@
 #define NT_RESUME      21  /* NtResumeThread: __spawn: a new process starts suspended */
 #define NT_ALLOC       22  /* NtAllocateVirtualMemory: a real brk, for a program too big to live inside the image */
 #define NT_CLONE       23  /* RtlCloneUserProcess: fork; absent on wine, where the slot stays 0 */
+#define NT_GETCONTEXT  24  /* NtGetContextThread: fork: the context a suspended child would start with */
+#define NT_SETCONTEXT  25  /* NtSetContextThread: fork: point that child at where its parent was instead */
+#define NT_WRITEVM     26  /* NtWriteVirtualMemory: fork: copy this process's memory into that child */
+#define NT_READVM      27  /* NtReadVirtualMemory: fork: watch for the child to say it has parked */
+#define NT_SUSPEND     28  /* NtSuspendThread: fork: stop that child before overwriting it */
 
 #endif

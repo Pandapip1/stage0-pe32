@@ -99,9 +99,16 @@ DEFINE mov_edx,eax 89C2
 DEFINE mov_esi, BE
 DEFINE mov_eax,[eax+BYTE] 8B40
 DEFINE mov_eax,[fs:DWORD] 64A1
+DEFINE mov_eax,[esp] 8B0424
+DEFINE mov_eax,[esi] 8B06
+DEFINE mov_eax,esi 89F0
+DEFINE mov_eax,esp 89E0
 DEFINE mov_esi,[eax+BYTE] 8B70
 DEFINE mov_[DWORD],eax A3
+DEFINE mov_[DWORD],ebp 892D
 DEFINE mov_[DWORD],ebx 891D
+DEFINE mov_[DWORD],esi 8935
+DEFINE mov_[DWORD],edi 893D
 DEFINE mov_[DWORD],ecx 890D
 DEFINE mov_eax,[DWORD] A1
 DEFINE mov_ebx,[DWORD] 8B1D
@@ -132,6 +139,23 @@ DEFINE test_ebx,ebx 85DB
 :_start
 	call %resolve_all                           ; Find ntdll and resolve what we need from it
 	call %__libc_init                           ; Whatever the C library above wants set up
+
+	mov_eax,[DWORD] &__fork_child_flag          ; Did a fork put us here rather than a user?
+	test_eax,eax
+	je %_start_main                             ; The ordinary case, and the only one that runs main
+
+# A fork child, which must not run main and must not touch anything its parent
+# is about to overwrite.  Everything above has happened -- loader init, ntdll
+# resolved, the C library set up -- so the stack below is finished with and the
+# parent may have it.  Say so, and spin: the parent suspends this thread, copies
+# itself over this process, and points the thread at where it wants it.  Nothing
+# here ever leaves this loop under its own power.
+:_start_park
+	mov_eax, %1
+	mov_[DWORD],eax &__fork_parked
+	jmp %_start_park
+
+:_start_main
 
 	mov_ebp, &PE_end                            ; ARGV, the array of pointers
 	mov_ebx,ebp                                 ; Cursor into that array
@@ -360,6 +384,66 @@ DEFINE test_ebx,ebx 85DB
 	ret
 
 
+# __teb function
+# Receives nothing
+# Returns this thread's TEB
+#
+# fs:0x18 is the TEB's pointer to itself, which is the one field of it that can
+# be read without already knowing where it is.  fork wants StackBase and
+# StackLimit out of it, at 0x04 and 0x08: the committed stack, which is what
+# has to be copied into a child for the child to go on running where its parent
+# left off.
+:__teb
+	mov_eax,[fs:DWORD] %0x18
+	ret
+
+
+# __fork_setjmp function
+# Receives nothing, and must be called from fork itself and nowhere else
+# Returns 0, always
+#
+# Not setjmp, in the end, though it started as one.  A fork child does not need
+# to come back into fork -- it needs fork to have returned 0 to whoever called
+# it -- and aiming at fork's caller rather than into fork's own middle is both
+# simpler and the only version that works.
+#
+# The reason is where the stack is still standing by the time a child exists.
+# Resuming into the middle of fork means resuming onto slots that fork's own
+# later calls -- the spawn, the copies -- have long since reused for their own
+# frames: the saved registers and the return address that were there at the
+# moment of capture are gone.  fork's caller's frame is above all of that and
+# is never touched.
+#
+# This dialect makes the caller's frame easy to name.  Every function it
+# compiles begins `mov_esi,esp', so ESI is that function's locals pointer and
+# points at its own return address for as long as it runs; a call from within
+# it pushes ESI but does not change it.  So read from fork: [ESI] is where fork
+# returns to, and ESI+4 is the stack its caller will have once it has.  A child
+# started there with EAX zero is a child whose fork returned 0.
+:__fork_setjmp
+	mov_eax,[esi]                               ; fork's own return address
+	mov_[DWORD],eax &__fork_eip
+	mov_eax,esi
+	add_eax, %4                                 ; and its caller's ESP once it has
+	mov_[DWORD],eax &__fork_esp
+	xor_eax,eax
+	ret
+
+
+# Where __fork_setjmp wrote those down, and how fork reads them back.
+:__fork_geteip
+	mov_eax,[DWORD] &__fork_eip
+	ret
+
+:__fork_getesp
+	mov_eax,[DWORD] &__fork_esp
+	ret
+
+:__fork_exitaddr
+	mov_eax, &__exit
+	ret
+
+
 # __read_block function
 # Receives FILE* in EAX, buffer in EBX, count in ECX
 # Returns the number of bytes actually read in EAX, or 0 at end of file
@@ -521,4 +605,36 @@ DEFINE test_ebx,ebx 85DB
 
 :__stdinfo_rest
 	NULL
+	NULL
+
+# fork's handshake with a child of its own making.  A fork child is this same
+# program started again, and it has to run its own loader init -- on its own
+# stack, which is at the same address as its parent's, because an image with no
+# relocations gets no address-space layout randomisation and every copy of it
+# is laid out identically.  So the parent cannot copy anything in until that
+# init is done and out of the way.  __fork_child_flag is how it says "you are a
+# fork child, do not run main"; __fork_parked is how the child says back "I am
+# out of my own way now, and spinning".  See fork in M2libc-windows/process.c.
+:__fork_child_flag
+	NULL
+
+:__fork_parked
+	NULL
+
+:__fork_flagaddr
+	mov_eax, &__fork_child_flag
+	ret
+
+:__fork_parkedaddr
+	mov_eax, &__fork_parked
+	ret
+
+
+# fork's three words: where __fork_setjmp's caller would have carried on, and
+# the stack it would have carried on with.  Written once per fork, in the
+# parent, and read back out of the copy the child was given.
+:__fork_eip
+	NULL
+
+:__fork_esp
 	NULL

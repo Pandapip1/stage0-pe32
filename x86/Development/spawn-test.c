@@ -14,13 +14,17 @@
  * assembling hex0_x86.hex0 is the obvious one: the result should be the seed,
  * byte for byte, which is worth checking afterwards.
  *
- * What this shows, in order: fork fails and says so; a spawned child gets this
- * process's standard handles, so anything it prints lands here; waitpid brings
- * back what it exited with; a program that is not there fails rather than
- * hanging; arguments survive being joined into one command line and split
- * again, which it checks by spawning itself; and execve does not return.
+ * What this shows, in order: a spawned child gets this process's standard
+ * handles, so anything it prints lands here; waitpid brings back what it
+ * exited with; a program that is not there fails rather than hanging;
+ * arguments survive being joined into one command line and split again, which
+ * it checks by spawning itself; and execve does not return.
  *
- * The second and fifth of those are the ones worth watching on Windows: they
+ * fork is not exercised here -- x86/Development/fork-test.c is where that
+ * lives.  An earlier version of this file called it once to show that it
+ * failed, which stopped being true.
+ *
+ * The first and fourth of those are the ones worth watching on Windows: they
  * used to fail there and pass under wine, because a child's startup replaced
  * the standard handles it had been given before it ran.  The "and what arrived
  * was" list coming out empty is that failure, rather than an argument that did
@@ -50,11 +54,6 @@ int main(int argc, char** argv)
 		fflush(stdout);
 		return 0;
 	}
-
-	fputs("fork() = ", stdout);
-	fputs(int2str(fork(), 10, TRUE), stdout);
-	fputs("   (expected -1: see __clone_process in M2libc-windows/process.c)\n", stdout);
-	fflush(stdout);
 
 	/* argv[1] onwards, in an array of its own */
 	a = calloc(argc, 4);
