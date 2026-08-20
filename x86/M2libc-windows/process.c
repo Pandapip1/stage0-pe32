@@ -533,6 +533,38 @@ int execve(char* file_name, char** argv, char** envp)
  *   to be thrown out of, so this particular objection would not arise in an
  *   x86_64 port of this bootstrap.
  *
+ *   Worth tracing further than "nothing to poke", because the actual
+ *   question is whether that setup can be run again, later, from user mode
+ *   -- and the answer is no, for a reason worth having by name rather than
+ *   by symptom.  A new WOW64 thread's real first instruction is not 32-bit
+ *   at all: the kernel (nt!PspAllocateThread / PspWow64InitThread) hands it
+ *   a synthetic exception whose address is the 64-bit ntdll's own
+ *   LdrInitializeThunk.  Disassembling that export in ntdll64.dll shows
+ *   exactly the gate this predicts: a bit test against a flag word in the
+ *   64-bit TEB (`test word [rax+0x17ee], 0x4000', rax from `mov rax,
+ *   gs:0x30') that skips a call when already set and takes it on a fresh
+ *   thread -- the call being the one-time WOW64 bring-up.  Public research on
+ *   this exact sequence (wbenny, "WoW64 internals", 2018) names every step
+ *   the disassembly only shows the shape of: LdrInitializeThunk ->
+ *   LdrpInitialize -> LdrpLoadWow64, which loads wow64.dll and hands off to
+ *   Wow64LdrpInitialize, which calls ProcessInit and ThreadInit (this is
+ *   where r12 and r13 come from, via RtlWow64GetCpuAreaInfo) and then
+ *   RunCpuSimulation, which calls wow64cpu!BTCpuSimulate, which sets r15 and
+ *   enters RunSimulatedCode -- the loop that never returns and is what
+ *   finally executes a 32-bit instruction for this thread, for the first
+ *   time.  Every part of that chain runs in 64-bit mode, reached only by the
+ *   kernel choosing LdrInitializeThunk as where a new thread starts.
+ *   SKIP_LOADER_INIT is exactly the kernel choosing something else instead --
+ *   the caller's 32-bit StartRoutine, directly -- which is why the fault
+ *   above is a clean 32-bit instruction at a sensible ntdll address rather
+ *   than garbage: the mode switch to CS=0x23 did happen, correctly, by
+ *   whatever set up the thread's context in the first place.  What did not
+ *   happen is everything upstream of it.  There is no way from the 32-bit
+ *   side to reach that chain after the fact: the only sanctioned 32-to-64
+ *   transition a WOW64 thread has is the one at the top of this note, and it
+ *   needs r15 to work -- which is exactly what is missing.  Asking it to
+ *   bootstrap itself is circular, not merely hard.
+ *
  *   It is not a missing page: the Wow64Transition pointer holds the same
  *   value in the clone as here, the code it points at can be read in both,
  *   and NtQueryVirtualMemory gives both the same State, the same Protect --
