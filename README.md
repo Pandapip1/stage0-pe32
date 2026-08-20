@@ -379,9 +379,29 @@ through intact; what is missing is scoped to the one thread, not the process.
 That keeps open a narrower question than the one above: whether a thread made
 the ordinary way afterwards -- fresh, with `NtCreateThreadEx`, never touching
 the cloned thread at all -- would get the segment setup that thread did not.
-Not yet tried: it needs a start routine that never returns through an
-ordinary call frame, since nothing calls back into it the way M2-Planet's own
-calling convention assumes.
+
+Tried, and inconclusive rather than answered. `RtlExitUserThread` needs no
+hand-written assembly to satisfy "never returns through an ordinary call
+frame": it is documented `DECLSPEC_NORETURN`, and handed to
+`NtCreateThreadEx` directly as `StartRoutine` with a distinctive `NTSTATUS`
+as `Argument`, it ends the (single) thread -- and so the process -- with that
+value if it ever gets there. Against the clone: `STATUS_ACCESS_DENIED`, even
+from a handle freshly opened with `NtOpenProcess` asking for
+`PROCESS_ALL_ACCESS` -- which is not a DACL problem, since `NtOpenProcess`
+granting that access is itself proof the security check already passed, and
+`NtCreateThreadEx` failed anyway with the same already-granted handle. So
+this was not going to settle the clone question either way, which running the
+identical sequence against an ordinary `__spawn` child instead of a clone
+confirmed: `STATUS_ACCESS_DENIED` there too. Cross-process thread creation is
+refused here regardless of how the target process came to exist, which
+points at a precondition on the caller -- `SeDebugPrivilege` not being
+enabled is the well-known one for exactly this operation -- rather than
+anything about cloning. Enabling it needs `LookupPrivilegeValue`, which is
+`advapi32`, not `ntdll`, and out of reach of the ntdll-only calls this port
+makes; hardcoding the LUID it would resolve to was not done, on the same
+principle as everywhere else here: measured, not assumed. So the fresh-thread
+question above is still open, blocked on infrastructure this probe did not
+have, not on a result that closes it.
 
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
