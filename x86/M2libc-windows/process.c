@@ -1056,6 +1056,55 @@ int __clone_process()
 	return info[1];                  /* and the parent gets a handle to it */
 }
 
+/* __wow64fix_fail_at: which of __clone_process_wow64fix's own -1 returns ran,
+ * set right before each one and otherwise left alone (never reset to 0 on
+ * success -- a caller that cares reads it only after seeing -1). This is not
+ * part of fork()'s contract and never will be: every one of those -1 returns
+ * still reaches fork() as a plain -1, so "if(-1 != wow64fix_rc) return
+ * wow64fix_rc;" and every ordinary caller of fork() keeps seeing exactly
+ * what POSIX promises, nothing more. It exists because this whole function
+ * is a measured-on-one-VM, one-Windows-build fix layered over undocumented
+ * WOW64 internals (see wow64-clone-driver.md sec 8-9) -- exactly the kind of
+ * thing this file already keeps hard-won detail about in comments rather
+ * than discarding once it works, and a future build, a future VM, or this
+ * same VM after an update is the likeliest place this ever fails again. When
+ * that happens the fault is one of thirteen fixed points, not a stack trace,
+ * so the number this records is the whole diagnosis:
+ *
+ *   1  NT_CLONE (RtlCloneUserProcess) did not resolve at all
+ *   2  __wow64_selfpeb could not read this process's own 64-bit PEB
+ *   3  the 64-bit ntdll.dll was not found in the 64-bit module list (wow64cpu.dll
+ *      absent takes the plain-__clone_process fallback instead, not this path)
+ *   4  NtGetContextThread did not resolve in the 64-bit ntdll
+ *   5  NtSetContextThread did not resolve in the 64-bit ntdll
+ *   6  BTCpuSimulate did not resolve in wow64cpu.dll
+ *   7  the heaven's-gate trampoline (__gate_init) could not be built
+ *   8  RtlCloneUserProcess itself failed (rc not 0 and not STATUS_PROCESS_CLONED)
+ *   9  Step A: native NtGetContextThread on the clone's initial thread failed
+ *   10 Step B: native NtSetContextThread (Rip -> BTCpuSimulate) failed
+ *   11 Step C: the thunked NtGetContextThread on the 32-bit CPU-area CONTEXT failed
+ *   12 Step C: the thunked NtSetContextThread (Eax -> STATUS_PROCESS_CLONED) failed
+ *   13 Step C.5: NtWriteVirtualMemory zeroing RtlCloneUserProcess's internal
+ *      lock in the child failed
+ *
+ * (there is no failure tag between RtlCloneUserProcess's own 0x129-without-a-
+ * fix check and Step A: that check returns 0, not -1, and is not a failure.)
+ */
+int __wow64fix_fail_at;
+
+/* __wow64fix_dup_status / __wow64fix_qinfo_status: the raw NTSTATUS from,
+ * respectively, the NtDuplicateObject call inside __wow64_selfhandle and the
+ * NtWow64QueryInformationProcess64 call inside __wow64_selfpeb -- the two
+ * calls tag 2 above can only say "one of these failed" about, not which, nor
+ * with what status. Same philosophy as __wow64fix_fail_at and kept for the
+ * same reason: written on every call, success or failure (0 means
+ * STATUS_SUCCESS ran there, not "never called"), so a future tag-2 failure is
+ * diagnosable by reading two more numbers instead of reproducing this
+ * investigation. Neither is part of fork()'s contract for the same reason
+ * __wow64fix_fail_at is not. */
+int __wow64fix_dup_status;
+int __wow64fix_qinfo_status;
+
 /* __clone_process_wow64fix: the same RtlCloneUserProcess as __clone_process
  * above, with the fix x86/Development/wow64-clone-driver.md sec 8-9 measured
  * applied before the child is ever let run.
@@ -1135,6 +1184,31 @@ int __qadd64(int lo, int hi, int delta, int* hi_out)
 	return newlo;
 }
 
+/* __wow64_align16: round a heap pointer up to the next 16-byte boundary.
+ *
+ * calloc's own bump allocator (M2libc's stdlib.c, via _malloc_brk) makes no
+ * alignment promise at all beyond whatever __heap_start happens to be --
+ * measured directly on this VM (Development/align-probe.c, not kept), three
+ * successive callocs of 4, 4 and 48 bytes came back 6 mod 8, not even
+ * 4-byte-aligned, every time. Every buffer this file hands to a WOW64
+ * 64-bit call -- NtWow64QueryInformationProcess64's PROCESS_BASIC_
+ * INFORMATION64, NtWow64ReadVirtualMemory64's PULONG64 byte count, and the
+ * CONTEXT_AMD64 buffers the heaven's-gate calls in __clone_process_wow64fix
+ * use -- holds 64-bit fields the kernel probes for natural alignment,
+ * answering STATUS_DATATYPE_MISALIGNMENT (0x80000002) rather than fixing it
+ * up: __wow64fix_qinfo_status read exactly that value, measured against
+ * __wow64_selfpeb's unaligned `info` buffer, which is what sent
+ * __wow64fix_fail_at to 2 every time this was run before this function
+ * existed. 16 rather than 8 matches fork()'s own already-working
+ * CONTEXT_AMD64 rounding elsewhere in this file (ctx_raw, below). Every
+ * caller must over-allocate 15 extra bytes so the rounded-up address still
+ * has room for what it asked for. */
+int __wow64_align16(int raw)
+{
+	raw = raw + 15;
+	return raw - (raw % 16);
+}
+
 /* A real (non-pseudo) handle to this process, cached in a global because
  * every 64-bit read this file makes wants one. NtWow64ReadVirtualMemory64
  * and NtWow64QueryInformationProcess64 both answer STATUS_INVALID_HANDLE
@@ -1160,7 +1234,8 @@ int __wow64_selfhandle()
 	NtDuplicateObject = __ntdll(NT_DUP);
 	/* forwards: NtDuplicateObject(-1, -1, -1, out, 0, 0,
 	 *                             DUPLICATE_SAME_ACCESS) */
-	if(0 != NtDuplicateObject(2, 0, 0, out, -1, -1, -1)) return -1;
+	__wow64fix_dup_status = NtDuplicateObject(2, 0, 0, out, -1, -1, -1);
+	if(0 != __wow64fix_dup_status) return -1;
 	__wow64_self_handle_cache = out[0];
 	__wow64_self_handle_have = 1;
 	return out[0];
@@ -1174,16 +1249,40 @@ int __wow64_rd64(int lo, int hi, int* buf, int len)
 {
 	int (*NtWow64ReadVirtualMemory64)(int, int, int, int, int, int, int);
 	int* got;
+	char* scratch;
+	char* dst;
 	int rc;
 	int self;
+	int i;
 
 	self = __wow64_selfhandle();
-	got = calloc(2, 4);
+	got = calloc(8 + 16, 1);
+	got = __wow64_align16(got);
+	/* NumberOfBytesRead is PULONG64 in the real signature, not plain ULONG,
+	 * so it gets the same treatment as the Buffer below rather than being
+	 * left as the caller-owned buf-sized pointer __inheritable-style calls
+	 * would use. */
+	scratch = calloc(len + 16, 1);
+	scratch = __wow64_align16(scratch);
 	NtWow64ReadVirtualMemory64 = __ntdll(NT_WOW64READVM);
-	/* forwards: NtWow64ReadVirtualMemory64(self, lo, hi, buf, len, 0, got) --
+	/* forwards: NtWow64ReadVirtualMemory64(self, lo, hi, scratch, len, 0, got) --
 	 * everything read here is this process's own 64-bit view of itself, but
-	 * by the real handle above, not the -1 pseudo-handle. */
-	rc = NtWow64ReadVirtualMemory64(got, 0, len, buf, hi, lo, self);
+	 * by the real handle above, not the -1 pseudo-handle. scratch, 16-aligned,
+	 * rather than buf directly: buf is a caller-owned heap pointer with no
+	 * alignment guarantee (see __wow64_align16), and this is the same call
+	 * family as __wow64_selfpeb's, measured returning
+	 * STATUS_DATATYPE_MISALIGNMENT against an unaligned buffer. */
+	rc = NtWow64ReadVirtualMemory64(got, 0, len, scratch, hi, lo, self);
+	if(0 == rc)
+	{
+		dst = buf;
+		i = 0;
+		while(i < len)
+		{
+			dst[i] = scratch[i];
+			i = i + 1;
+		}
+	}
 	return rc;
 }
 
@@ -1468,14 +1567,23 @@ int __wow64_selfpeb(int* hi_out)
 	int self;
 	int rc;
 
-	info = calloc(12, 4);
-	retlen = calloc(1, 4);
+	/* 16-aligned, not the plain calloc(12, 4) this used to be: this exact
+	 * call, against that unaligned buffer, is what __wow64fix_qinfo_status
+	 * measured returning STATUS_DATATYPE_MISALIGNMENT (0x80000002) -- see
+	 * __wow64_align16. retlen gets the same treatment since it is also
+	 * handed to a WOW64 64-bit call, even though ReturnLength's own type is
+	 * a plain ULONG rather than one of the 64-bit ones. */
+	info = calloc(48 + 16, 1);
+	info = __wow64_align16(info);
+	retlen = calloc(4 + 16, 1);
+	retlen = __wow64_align16(retlen);
 	self = __wow64_selfhandle();
 	NtWow64QueryInformationProcess64 = __ntdll(NT_WOW64QINFO);
 	/* forwards: NtWow64QueryInformationProcess64(self, 0, info, 48, retlen) --
 	 * self, not -1: see __wow64_selfhandle's note on __wow64_rd64 above,
 	 * which this same call was the other half of that measurement. */
 	rc = NtWow64QueryInformationProcess64(retlen, 48, info, 0, self);
+	__wow64fix_qinfo_status = rc;
 	if(0 != rc) { hi_out[0] = 0; return 0; }
 	hi_out[0] = info[3];
 	return info[2];
@@ -1495,6 +1603,7 @@ int __clone_process_wow64fix()
 	int (*NtSetContextThread)(int, int);
 	int (*NtTerminateProcess)(int, int);
 	int (*NtWriteVirtualMemory)(int, int, int, int, int);
+	int (*NtClose)(int);
 	int* info;
 	int gate;
 	int* peb_hi;
@@ -1505,6 +1614,7 @@ int __clone_process_wow64fix()
 	int setctx_lo; int* setctx_hi;
 	int btcpu_lo; int* btcpu_hi;
 	int thread;
+	int child;
 	int* ctxA;
 	int* ctxB;
 	int rspA_lo; int rspA_hi;
@@ -1517,13 +1627,13 @@ int __clone_process_wow64fix()
 	int i;
 
 	RtlCloneUserProcess = __ntdll(NT_CLONE);
-	if(NULL == RtlCloneUserProcess) return -1;
+	if(NULL == RtlCloneUserProcess) { __wow64fix_fail_at = 1; return -1; }
 
 	/* -- resolve everything the fix needs before touching the clone at all -- */
 	peb_hi = calloc(1, 4);
 	i = __wow64_selfpeb(peb_hi);        /* see below: NtWow64QueryInformationProcess64 */
 	peb_lo = i;
-	if((0 == peb_lo) && (0 == peb_hi[0])) return -1;
+	if((0 == peb_lo) && (0 == peb_hi[0])) { __wow64fix_fail_at = 2; return -1; }
 
 	/* Everything from here down exists only because of WOW64: a 32-bit
 	 * process under a 64-bit kernel resumes a cloned thread directly in
@@ -1552,7 +1662,7 @@ int __clone_process_wow64fix()
 	wow64cpu_hi = calloc(1, 4);
 	wow64cpu_lo = __wow64_find_module(peb_lo, peb_hi[0], "wow64cpu.dll", wow64cpu_hi);
 	if((0 == wow64cpu_lo) && (0 == wow64cpu_hi[0])) return __clone_process();
-	if((0 == ntdll64_lo) && (0 == ntdll64_hi[0])) return -1;
+	if((0 == ntdll64_lo) && (0 == ntdll64_hi[0])) { __wow64fix_fail_at = 3; return -1; }
 
 	getctx_hi = calloc(1, 4);
 	getctx_lo = __wow64_resolve_export(ntdll64_lo, ntdll64_hi[0], "NtGetContextThread", getctx_hi);
@@ -1560,30 +1670,53 @@ int __clone_process_wow64fix()
 	setctx_lo = __wow64_resolve_export(ntdll64_lo, ntdll64_hi[0], "NtSetContextThread", setctx_hi);
 	btcpu_hi = calloc(1, 4);
 	btcpu_lo = __wow64_resolve_export(wow64cpu_lo, wow64cpu_hi[0], "BTCpuSimulate", btcpu_hi);
-	if((0 == getctx_lo) && (0 == getctx_hi[0])) return -1;
-	if((0 == setctx_lo) && (0 == setctx_hi[0])) return -1;
-	if((0 == btcpu_lo) && (0 == btcpu_hi[0])) return -1;
+	if((0 == getctx_lo) && (0 == getctx_hi[0])) { __wow64fix_fail_at = 4; return -1; }
+	if((0 == setctx_lo) && (0 == setctx_hi[0])) { __wow64fix_fail_at = 5; return -1; }
+	if((0 == btcpu_lo) && (0 == btcpu_hi[0])) { __wow64fix_fail_at = 6; return -1; }
 
 	gate = __gate_init();
-	if(0 == gate) return -1;
+	if(0 == gate) { __wow64fix_fail_at = 7; return -1; }
 
 	/* -- clone, suspended -- */
 	info = calloc(32, 4);
 	i = 0;
 	while(i < 32) { info[i] = 0; i = i + 1; }
 	info[0] = 68;
-	/* forwards: RtlCloneUserProcess(RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED,
-	 *                               NULL, NULL, NULL, info) */
-	rc = RtlCloneUserProcess(info, 0, 0, 0, 1);
+	/* forwards: RtlCloneUserProcess(RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED |
+	 *                               RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES,
+	 *                               NULL, NULL, NULL, info) -- 3, not the bare
+	 *                               CREATE_SUSPENDED (1) this used to pass.
+	 * wow64-clone-driver.md sec 8-9's own validation never opened a file or
+	 * wrote through an inherited handle in the child, so CREATE_SUSPENDED
+	 * alone was never wrong for what it measured; fork() actually running
+	 * ordinary programs is what exposed the gap. Measured directly:
+	 * fork-test's own child print (stdout) and fork-file-test's child write
+	 * (an opened file) both went missing with flags=1, and __clone_process
+	 * above -- the older, un-preferred clone -- already asks for
+	 * INHERIT_HANDLES (flags=2) for exactly this reason, so this brings the
+	 * fixed-up clone in line with the one call in this file that already got
+	 * it right. */
+	rc = RtlCloneUserProcess(info, 0, 0, 0, 3);
 	if(0x129 == rc) return 0;   /* the clone ran with no fix at all -- never
 	                             * observed on this project's VM, kept as a
 	                             * cheap check in case a future Windows build
 	                             * no longer needs any of this. */
-	if(0 != rc) return -1;
+	if(0 != rc) { __wow64fix_fail_at = 8; return -1; }
 	thread = info[2];
+	/* Hoisted once, here, and used everywhere below instead of info[1]
+	 * directly: this dialect's calling convention keeps the target of an
+	 * indirect call in EDX while it evaluates that call's arguments (see
+	 * libc-core.M1's own note on __ntdll), and info[1] as an argument is an
+	 * array subscript -- a multiply -- which clobbers EDX before the call it
+	 * is an argument to ever runs. check_fnptr_args.py already flags every
+	 * such site; this is the fix, not just a suppression, matching how
+	 * fork() below already hoists the same field into a local called
+	 * child. */
+	child = info[1];
 
 	/* -- Step A: native NtGetContextThread on the never-run initial thread -- */
 	ctxA = calloc(0x4D0 + 16, 1);
+	ctxA = __wow64_align16(ctxA);
 	i = 0;
 	while(i < (0x4D0 / 4)) { ctxA[i] = 0; i = i + 1; }
 	ctxA[12] = 0x100007;              /* ContextFlags at +0x30: CONTROL|INTEGER|SEGMENTS */
@@ -1591,7 +1724,8 @@ int __clone_process_wow64fix()
 	if(0 != rc)
 	{
 		NtTerminateProcess = __ntdll(NT_EXIT);
-		NtTerminateProcess(1, info[1]);
+		NtTerminateProcess(1, child);
+		__wow64fix_fail_at = 9;
 		return -1;
 	}
 	rspA_lo = ctxA[0x98 / 4];
@@ -1599,6 +1733,7 @@ int __clone_process_wow64fix()
 
 	/* -- Step B: native NtSetContextThread, redirecting Rip -> BTCpuSimulate -- */
 	ctxB = calloc(0x4D0 + 16, 1);
+	ctxB = __wow64_align16(ctxB);
 	i = 0;
 	while(i < (0x4D0 / 4)) { ctxB[i] = 0; i = i + 1; }
 	ctxB[12] = 0x100001;              /* CTXF_CONTROL: Rip/Rsp/SegCs/SegSs/EFlags */
@@ -1611,7 +1746,8 @@ int __clone_process_wow64fix()
 	if(0 != rc)
 	{
 		NtTerminateProcess = __ntdll(NT_EXIT);
-		NtTerminateProcess(1, info[1]);
+		NtTerminateProcess(1, child);
+		__wow64fix_fail_at = 10;
 		return -1;
 	}
 
@@ -1628,6 +1764,7 @@ int __clone_process_wow64fix()
 	NtGetContextThread = __ntdll(NT_GETCONTEXT);
 	NtSetContextThread = __ntdll(NT_SETCONTEXT);
 	ctxA = calloc(0x2CC + 16, 1);
+	ctxA = __wow64_align16(ctxA);
 	i = 0;
 	while(i < 179) { ctxA[i] = 0; i = i + 1; }
 	ctxA[0] = 0x10007;
@@ -1635,7 +1772,8 @@ int __clone_process_wow64fix()
 	if(0 != rc)
 	{
 		NtTerminateProcess = __ntdll(NT_EXIT);
-		NtTerminateProcess(1, info[1]);
+		NtTerminateProcess(1, child);
+		__wow64fix_fail_at = 11;
 		return -1;
 	}
 	ctxA[44] = 0x129;                 /* Eax at +0xB0 */
@@ -1643,7 +1781,8 @@ int __clone_process_wow64fix()
 	if(0 != rc)
 	{
 		NtTerminateProcess = __ntdll(NT_EXIT);
-		NtTerminateProcess(1, info[1]);
+		NtTerminateProcess(1, child);
+		__wow64fix_fail_at = 12;
 		return -1;
 	}
 
@@ -1683,9 +1822,9 @@ int __clone_process_wow64fix()
 	 * ntdll's base directly. NtWriteVirtualMemory here is the same call
 	 * __fork_write below wraps for fork()'s own copy into a child; it is
 	 * inlined rather than shared because __fork_write is declared later in
-	 * this file than this function is. info[1] is the child's process
-	 * handle (RTL_USER_PROCESS_INFORMATION.Process), the same field fork()'s
-	 * own note reads. */
+	 * this file than this function is. child (info[1]) is the child's
+	 * process handle (RTL_USER_PROCESS_INFORMATION.Process), the same field
+	 * fork()'s own note reads. */
 	rtlclone_rva = 0xbaa60;
 	lock_rva = 0x12d52c;
 	lock_addr = RtlCloneUserProcess - rtlclone_rva + lock_rva;
@@ -1693,12 +1832,13 @@ int __clone_process_wow64fix()
 	zero[0] = 0;
 	wrote = calloc(1, 4);
 	NtWriteVirtualMemory = __ntdll(NT_WRITEVM);
-	/* forwards: NtWriteVirtualMemory(info[1], lock_addr, zero, 4, wrote) */
-	rc = NtWriteVirtualMemory(wrote, 4, zero, lock_addr, info[1]);
+	/* forwards: NtWriteVirtualMemory(child, lock_addr, zero, 4, wrote) */
+	rc = NtWriteVirtualMemory(wrote, 4, zero, lock_addr, child);
 	if(0 != rc)
 	{
 		NtTerminateProcess = __ntdll(NT_EXIT);
-		NtTerminateProcess(1, info[1]);
+		NtTerminateProcess(1, child);
+		__wow64fix_fail_at = 13;
 		return -1;
 	}
 
@@ -1707,7 +1847,14 @@ int __clone_process_wow64fix()
 	/* forwards: NtResumeThread(thread, NULL) */
 	NtResumeThread(0, thread);
 
-	return info[1];
+	/* The thread handle has done its one job, same as __spawn's own (above)
+	 * and fork()'s spawn+copy fallback's own (below) -- both already close
+	 * theirs; this one leaked it on every successful clone until now, one
+	 * handle per fork(). */
+	NtClose = __ntdll(NT_CLOSE);
+	NtClose(thread);
+
+	return child;
 }
 
 /* Measured on this project's win11 VM (wow64-clone-driver.md sec 9.3-9.4):
