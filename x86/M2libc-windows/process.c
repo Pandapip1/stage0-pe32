@@ -69,18 +69,45 @@
  * The child inherits this process's three standard handles, which is what
  * makes redirection work at all, but only those three.
  *
- * That last part works under wine and does NOT work on Windows, and the
- * difference is not understood.  What is known: the three handles are
- * duplicated with OBJ_INHERIT and their numbers written into the child's
- * parameter block; the child reads those same numbers back out of its own
- * PEB; and NtWriteFile to them returns success and a count.  On Windows the
- * bytes then go nowhere -- not to the parent's console and not to the file
- * the parent's output was redirected to, with the parent writing nothing
- * afterwards that could land on top of them.  A child still runs, still reads
- * and writes files it opens itself, and still reports its exit status, all of
- * which are checked on Windows; only handles it was given rather than opened
- * are affected.  Everything this bootstrap builds opens its own files, so
- * nothing here depends on it, but a shell would.
+ * Handing a child those three takes one thing beyond the obvious, and without
+ * it the failure is silent.  The obvious part is that each handle is
+ * duplicated with OBJ_INHERIT and its number written into the parameter block
+ * the child's PEB will point at.  Do only that, and on Windows the child runs,
+ * reads its numbers back out of its own PEB, writes to them, and is told by
+ * the kernel that the bytes went out -- STATUS_SUCCESS and a count in the
+ * IO_STATUS_BLOCK -- and nothing arrives anywhere.
+ *
+ * What happens in between is that the child's own startup replaces them.  It
+ * copies the parameter block onto its heap, and unless it is told otherwise it
+ * fills the three handle fields in with console handles of its own making
+ * before the first instruction of the program runs.  The numbers the parent
+ * wrote are gone by then, and writes to what replaced them are accepted and
+ * discarded.  Measured, with the child suspended and then asked from the
+ * inside: its PEB->ProcessParameters is not the address the parent poked, the
+ * handle it ends up with is not the one it was given, and
+ * NtQueryInformationFile on it answers STATUS_INVALID_DEVICE_REQUEST where the
+ * parent's own handle names the pipe it really is.  The handle the parent
+ * duplicated is still there and still works -- writing to it by number, from
+ * the child, reaches the parent's pipe -- so it is the three fields that are
+ * lost rather than the handles.
+ *
+ * Being told otherwise is STARTF_USESTDHANDLES in WindowFlags.  ReactOS's
+ * SetUpHandles -- dll/win32/kernel32/client/console/init.c -- is the same
+ * decision written down: it assigns the three console handles over the
+ * parameter block's only `if ((dwStartupFlags & STARTF_USESTDHANDLES) == 0)`.
+ * That flag is what a Win32 caller sets by filling in STARTUPINFO's hStdInput,
+ * hStdOutput and hStdError, and there is no way to reach it from
+ * RtlCreateUserProcess's arguments, so __spawn writes it into the block
+ * directly.  With it set the handles survive, and a child's output lands
+ * wherever the parent's does.
+ *
+ * wine never had the problem for a reason that flatters nobody: it does this
+ * in kernelbase rather than in ntdll -- init_console_std_handles, called from
+ * dlls/kernelbase/console.c -- and a program that imports ntdll and nothing
+ * else never loads kernelbase, so on wine there is nothing to overwrite the
+ * three fields and the flag is never consulted.  Every program this bootstrap
+ * builds is such a program.  Worth remembering as a shape rather than a
+ * detail: wine agreeing is not evidence that Windows will.
  *
  * The calling rules for everything below are in M2libc-windows/ntdll.c: the
  * arguments go in backwards, and none of them may write EDX.
@@ -341,6 +368,11 @@ int __spawn(char* file_name, char** argv, char** envp)
 	slot = __stdslot(2);
 	h = slot[0];
 	params[8] = __inheritable(h);
+
+	/* STARTF_USESTDHANDLES, in WindowFlags at 0x68 into the block, which is
+	 * what stops the three handles just written from being thrown away
+	 * before the child's first instruction.  See the head of this file. */
+	params[26] = 256;
 
 	/* RTL_USER_PROCESS_INFORMATION: Length, Process, Thread, a CLIENT_ID and
 	 * a SECTION_IMAGE_INFORMATION, which is 68 bytes altogether.  The room is

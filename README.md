@@ -251,25 +251,56 @@ A caller that today says `fork()` then `execve` in the child and `waitpid` in
 the parent says `__spawn` then `waitpid` instead, and needs no fork; that is
 the change `kaem` and M2-Mesoplanet would want, and it is two lines.
 
-The child is meant to inherit this process's three standard handles, which is
-what would make redirection possible, and here the port has a defect: it works
-under wine and not on Windows. `NtCreateUserProcess` called directly rather
-than through `RtlCreateUserProcess` was tried, because its `PS_ATTRIBUTE_LIST`
-is the only way to ask for `PsAttributeStdHandleInfo` and
-`PsAlwaysDuplicate` -- "always duplicate standard handles" -- and it does not
-fix this. It needs every structure 8-aligned, since `PS_CREATE_INFO` holds
-`ULONGLONG`s and the kernel answers `STATUS_DATATYPE_MISALIGNMENT` otherwise;
-with that done it returns `PsCreateSuccess`, the child runs -- hex0 started
-that way assembles the seed byte for byte -- and its writes to the standard
-handles still go nowhere. So `__spawn` keeps `RtlCreateUserProcess`, which is
-the same call with less to get wrong. The handles are duplicated with `OBJ_INHERIT`
-and their numbers written into the child's parameter block, the child reads the
-same numbers back out of its own PEB, and `NtWriteFile` to them returns success
-and a count -- and on Windows the bytes go nowhere. A child still runs, still
-reads and writes files it opens itself, and still reports its exit status,
-which are checked on Windows; only handles it was given rather than opened are
-affected. Nothing built here depends on it, because every program in this chain
-opens its own files, but a shell would. Windows hands a child one string rather than a vector,
+The child inherits this process's three standard handles, which is what makes
+redirection possible, and getting that right took one thing beyond the obvious.
+The obvious part is that each handle is duplicated with `OBJ_INHERIT` and its
+number written into the child's parameter block, where the child reads it back
+out of its own PEB. Do only that and the child writes, `NtWriteFile` answers
+`STATUS_SUCCESS` with a count in the `IO_STATUS_BLOCK`, and nothing arrives
+anywhere -- under wine it works, on Windows it does not.
+
+What happens in between is that the child's own startup replaces those handles.
+It copies the parameter block onto its heap and fills the three handle fields
+in with console handles of its own before the program's first instruction, so
+the numbers the parent wrote are already gone, and writes to what replaced them
+are accepted and discarded. Measured, with the child suspended and then asked
+from the inside: its `PEB->ProcessParameters` is not the address the parent
+poked, the handle it ends up with is not the one it was given, and
+`NtQueryInformationFile` on it answers `STATUS_INVALID_DEVICE_REQUEST` where the
+parent's own handle names the pipe it really is. The handle the parent
+duplicated is still there and still works -- writing to it by number, from
+inside the child, reaches the parent's pipe -- so what is lost is the three
+fields, not the handles.
+
+The flag that stops it is `STARTF_USESTDHANDLES`, in the parameter block's
+`WindowFlags` at `0x68`. ReactOS's `SetUpHandles`
+(`dll/win32/kernel32/client/console/init.c`) is the same decision written down:
+it assigns the console's handles over the parameter block's only
+`if ((dwStartupFlags & STARTF_USESTDHANDLES) == 0)`. A Win32 caller sets that
+flag by filling in `STARTUPINFO`'s `hStdInput`, `hStdOutput` and `hStdError`,
+and nothing in `RtlCreateUserProcess`'s arguments reaches it, so `__spawn`
+writes it into the block directly. With it set the handles survive and a
+child's output lands wherever the parent's does -- console, pipe or redirected
+file, all three checked on Windows 11.
+
+Two things are worth keeping from the way this was found. `NtCreateUserProcess`
+called directly rather than through `RtlCreateUserProcess` was tried first,
+because its `PS_ATTRIBUTE_LIST` is the only way to ask for
+`PsAttributeStdHandleInfo` and `PsAlwaysDuplicate` -- "always duplicate standard
+handles" -- and it does not fix this, since the replacement happens in the child
+afterwards regardless. It needs every structure 8-aligned, `PS_CREATE_INFO`
+holding `ULONGLONG`s and the kernel answering `STATUS_DATATYPE_MISALIGNMENT`
+otherwise; with that done it returns `PsCreateSuccess` and the child runs. So
+`__spawn` keeps `RtlCreateUserProcess`, which is the same call with less to get
+wrong. And wine never had the problem for a reason that flatters nobody: it
+does this in kernelbase rather than in ntdll -- `init_console_std_handles`,
+called from `dlls/kernelbase/console.c` -- and a program that imports ntdll and
+nothing else never loads kernelbase, so there is nothing there to overwrite the
+three fields and the flag is never consulted. Every program this bootstrap
+builds is such a program. Worth remembering as a shape rather than a detail:
+wine agreeing is not evidence that Windows will.
+
+Windows hands a child one string rather than a vector,
 so `__spawn` joins argv into one and the child splits it again; both halves
 follow `CommandLineToArgvW`, so an argument survives whatever is in it.
 `C:\dir\` is the case that makes the rule worth following exactly rather than
