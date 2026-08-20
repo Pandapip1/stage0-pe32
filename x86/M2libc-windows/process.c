@@ -466,11 +466,14 @@ int execve(char* file_name, char** argv, char** envp)
  *   -- checked by having that statement be a single fopen of a file whose
  *   presence is the whole test.
  *
- *   Where it stops is not the same for every flag combination, and an earlier
- *   version of this note saying it was is simply wrong.  With 0,
+ *   How it stops is not the same for every flag combination.  With 0,
  *   CREATE_SUSPENDED, INHERIT_HANDLES or both, the child deadlocks.  With
  *   NO_SYNCHRONIZE, with or without the others, it does not deadlock: it runs
- *   and dies of an access violation.
+ *   and dies of an access violation.  Two earlier versions of this note got
+ *   that wrong in opposite directions -- one said the outcome was the same
+ *   for every combination, the next said the child stopped in a different
+ *   place depending on them.  It stops in the same place either way; what the
+ *   flags change is whether it can say so.
  *
  *   The deadlock is an inherited lock.  RtlCloneUserProcess takes the SRW
  *   lock at ntdll+0x12d7a4 exclusively across the clone -- disassembling it

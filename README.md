@@ -232,9 +232,12 @@ port's doing: the identical call from 64-bit and from 32-bit PowerShell clones
 the process and never returns in the child either -- though see below for what
 that observation does and does not establish.
 
-Where it stops depends on the flags, and an earlier version of this section
-saying otherwise was wrong. Without `NO_SYNCHRONIZE` the child **deadlocks**;
-with it the child **runs and dies** of an access violation. The deadlock is an
+How it stops depends on the flags. Without `NO_SYNCHRONIZE` the child
+**deadlocks**; with it the child **runs and dies** of an access violation. Two
+earlier versions of this section got this wrong in opposite directions -- one
+said the outcome was the same for every flag combination, the next said the
+child stopped in a different *place* depending on them. It stops in the same
+place either way; what the flags change is whether it can say so. The deadlock is an
 inherited lock. `RtlCloneUserProcess` holds the SRW lock at `ntdll+0x12d7a4`
 exclusively across the clone -- disassembling it shows that address four times
 inside the one routine -- so the child's address space is a snapshot in which it
