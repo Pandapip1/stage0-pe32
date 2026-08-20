@@ -919,6 +919,22 @@ int execve(char* file_name, char** argv, char** envp)
  *   Windows".)  So this is not a gap in what this port knows about the call.
  *   It is the call not being for this.
  *
+ *   Which closes the loose end left above, and closes it the other way from
+ *   the way it was hoped.  The clone this machine demonstrably CAN make is
+ *   the same clone that cannot run.  PssCaptureSnapshot with
+ *   PSS_CAPTURE_VA_CLONE against that same 32-bit target returns
+ *   ERROR_SUCCESS; PssQuerySnapshot(PSS_QUERY_VA_CLONE_INFORMATION) hands
+ *   back a live clone handle whose ExitStatus is STILL_ACTIVE too; and
+ *   NtCreateThreadEx into it answers STATUS_PROCESS_IS_TERMINATING, the
+ *   identical 0xc000010a, for CreateFlags 0 and for CREATE_SUSPENDED.
+ *
+ *   So "something here can clone; whether the thing __clone_process calls is
+ *   that something remains unknown" was the right caution attached to the
+ *   wrong hope.  The documented API is a wrapper over the very call already
+ *   known to make unrunnable clones, and being documented does not make its
+ *   clone runnable.  Nothing in the box runs code in a VA clone, and the
+ *   reason is not that no one wrote the code to: the kernel will not have it.
+ *
  * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
  * which is checked rather than assumed: resolve_export returns 0 for a name
  * that is not in the export table.

@@ -674,6 +674,25 @@ Windows"](https://www.huntandhackett.com/blog/the-definitive-guide-to-process-cl
 So this is not a gap in what this port knows about the call. It is the call not
 being for this.
 
+Which closes the loose end left above, and closes it the other way from the way
+it was hoped. **The clone this machine demonstrably *can* make is the same clone
+that cannot run.**
+[`PssCaptureSnapshot`](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/nf-processsnapshot-psscapturesnapshot)
+with
+[`PSS_CAPTURE_VA_CLONE`](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/ne-processsnapshot-pss_capture_flags)
+against that same 32-bit target returns `ERROR_SUCCESS`;
+[`PssQuerySnapshot`](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/api/processsnapshot/nf-processsnapshot-pssquerysnapshot)`(`[`PSS_QUERY_VA_CLONE_INFORMATION`](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/ne-processsnapshot-pss_query_information_class)`)`
+hands back a live clone handle whose `ExitStatus` is `STILL_ACTIVE` too; and
+`NtCreateThreadEx` into it answers `STATUS_PROCESS_IS_TERMINATING`, the
+identical `0xc000010a`, for `CreateFlags` `0` and for `CREATE_SUSPENDED`.
+
+So "something here can clone; whether the thing `__clone_process` calls is that
+something remains unknown" was the right caution attached to the wrong hope. The
+documented API is a wrapper over the very call already known to make unrunnable
+clones, and being documented does not make its clone runnable. Nothing in the
+box runs code in a VA clone, and the reason is not that nobody wrote the code
+to: the kernel will not have it.
+
 So `fork` stops here, at an FS with no base, for a reason not yet pinned on
 either Windows or this code. Whichever it is, nothing in reach fixes it from
 user mode: a segment base lives in a descriptor the kernel owns, and the `SegFs`
