@@ -819,8 +819,30 @@ int execve(char* file_name, char** argv, char** envp)
  *   STATUS_ACCESS_VIOLATION -- the r15 finding above, reproduced across a
  *   process boundary rather than within one.
  *
- *   So the fresh-thread question above is open again, and this time for want
- *   of an answer rather than for want of a working probe.
+ *   Which finally makes the fresh-thread question above answerable, and the
+ *   answer is no.  Clone with CREATE_SUSPENDED, never resume the clone's own
+ *   thread at all, and inject the same RtlExitUserProcess thread into the
+ *   clone: NtCreateThreadEx returns STATUS_SUCCESS.  Two seconds later the
+ *   clone has not exited -- NtWaitForSingleObject times out, ExitStatus is
+ *   still STATUS_PENDING -- and NtGetContextThread on the thread just made
+ *   reports Eip RtlUserThreadStart, Cs 0x23, SegFs 0x53 and Esp 0x8a7fff0,
+ *   which is the very top of its own fresh stack.  That is its initial
+ *   context, unchanged: the thread has not executed one 32-bit instruction.
+ *
+ *   Zeroing the inherited loader lock first makes no difference to that,
+ *   which places whatever holds it up upstream of any 32-bit code at all --
+ *   in the native bring-up, or in the kernel, not in the 32-bit loader.  And
+ *   the control says the call itself is sound: the identical injection into
+ *   an ordinary __spawn child runs and exits with the value it was handed.
+ *
+ *   So a thread made the ordinary way in a clone does not get the segment
+ *   setup the cloned thread lacked, because it does not get as far as needing
+ *   it.  Not refused, not faulting, not deadlocked in the 32-bit loader: it
+ *   never starts.  The clone has a PEB32 and a process-level WOW64
+ *   association, and still no thread of any provenance runs 32-bit code in
+ *   it.  Where in the 64-bit bring-up that stops is the next thing anyone
+ *   picking this up would have to find, and it cannot be found from the
+ *   32-bit side, which is the same wall the r15 finding ends at.
  *
  * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
  * which is checked rather than assumed: resolve_export returns 0 for a name
