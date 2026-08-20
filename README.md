@@ -759,10 +759,34 @@ objection is. A native x86_64 program has no WOW64 layer -- `syscall` for system
 calls, and its TEB through `GS`, whose base the kernel programs for every thread
 -- so the question is worth asking again, from scratch, in an x86_64 port.
 
-`__clone_process` keeps the call and the measurements, and is not called. A
-system where the clone worked would get a cheaper fork than the one above for
-free, so the measurements are worth keeping even now that they are not on the
-path anything takes.
+That "out of reach from user mode" verdict two paragraphs up was wrong about
+the `ZwCreateUserProcess` half. `wow64cpu!RunSimulatedCode` -- the loop that
+actually runs 32-bit code -- does not take `r13`/`r15` as arguments; it loads
+them itself, from the thread's own TEB and CPU area, on every entry. So a
+cloned thread's initial context can be pointed straight at
+`RunSimulatedCode`'s own exported entry, `BTCpuSimulate`, from user mode: a
+native `NtSetContextThread` call (through a heaven's-gate 32-to-64-to-32
+trampoline, since the ordinary WOW64-thunked one only reaches the 32-bit
+CPU-area `CONTEXT`) plus the ordinary `NtSetContextThread` this port already
+uses elsewhere, to force `Eax` to `STATUS_PROCESS_CLONED`. That alone still
+deadlocked, on a second, unrelated lock: `RtlCloneUserProcess` holds an
+internal `ntdll` lock across the clone syscall that its own child-side branch
+never releases, and the child hangs forever trying to re-acquire it. Zeroing
+that one lock's four bytes in the child before resuming is the rest of the
+fix, and it is measured, not hoped: the clone runs ordinary 32-bit code past
+the point that fault used to end at, and returns `STATUS_PROCESS_CLONED`
+correctly. `x86/M2libc-windows/process.c`'s `__clone_process_wow64fix` is
+the whole of it; `x86/Development/wow64-clone-driver.md` has the disassembly.
+`NtCreateProcessEx` is still refused a thread regardless -- that half of the
+verdict stands.
+
+`__clone_process` keeps the call and the measurements for the plain,
+unfixed clone, and is still not called; `__clone_process_wow64fix` next to it
+is, now, and `fork` below prefers it whenever `RtlCloneUserProcess` resolves
+at all, WOW64 or not -- on a genuine 32-bit Windows the WOW64-specific gate
+and lock fixup are skipped outright, since the defect they exist for has
+nowhere to come from there. `fork` falls back to copying only when the clone
+path itself fails.
 
 So four calls, and a caller wanting a child may say either what POSIX says or
 the shorter thing Windows can do directly:

@@ -988,6 +988,27 @@ int execve(char* file_name, char** argv, char** envp)
  *   no FS base.  Neither is something a caller can hold differently.  The
  *   fork below copies, and will go on copying.
  *
+ *   That stood as the conclusion, and it was wrong about the second reason,
+ *   not the first: NtCreateProcessEx is still refused a thread, no way
+ *   around it, but "no FS base" turned out to be a symptom a user-mode
+ *   caller can reach past, not a wall. wow64cpu!RunSimulatedCode -- the loop
+ *   that runs 32-bit code at all -- does not take r13/r15 as arguments, it
+ *   loads them itself from the thread's own TEB and CPU area on every entry,
+ *   which means a cloned thread's initial context can be pointed at
+ *   RunSimulatedCode's own exported entry (BTCpuSimulate) directly, from
+ *   user mode, with nothing but NtSetContextThread called natively (a
+ *   heaven's-gate call, since the ordinary WOW64-thunked one only reaches
+ *   the 32-bit CPU-area CONTEXT) and the ordinary NtSetContextThread this
+ *   file already uses elsewhere. That alone still deadlocked -- a different,
+ *   unrelated lock inside RtlCloneUserProcess itself, held by the parent
+ *   across the clone syscall and never released on the child's side -- and
+ *   clearing that one is the rest of the fix. __clone_process_wow64fix
+ *   below is all of it, measured running to a real STATUS_PROCESS_CLONED
+ *   return in the child, not just free of the fault above; fork lower in
+ *   this file now prefers it, WOW64 or not, and falls back to copying only
+ *   when the clone path itself cannot be made to work. x86/Development/
+ *   wow64-clone-driver.md has the disassembly and every measurement in full.
+ *
  * wine does not export RtlCloneUserProcess at all, so the slot stays 0 there,
  * which is checked rather than assumed: resolve_export returns 0 for a name
  * that is not in the export table.
@@ -1034,6 +1055,727 @@ int __clone_process()
 
 	return info[1];                  /* and the parent gets a handle to it */
 }
+
+/* __clone_process_wow64fix: the same RtlCloneUserProcess as __clone_process
+ * above, with the fix x86/Development/wow64-clone-driver.md sec 8-9 measured
+ * applied before the child is ever let run.
+ *
+ * __clone_process's own note works out where the unfixed clone dies: FS has
+ * no base (fs:0x18 faults reading a TEB that is not there), because a clone's
+ * initial thread resumes directly in 32-bit mode instead of going through the
+ * 64-bit bring-up (LdrInitializeThunk -> ... -> wow64cpu!RunSimulatedCode)
+ * that programs the FS base and leaves r13/r15 live for the first 32-bit
+ * syscall. wow64-clone-driver.md sec 8 disassembles RunSimulatedCode and
+ * finds that r12/r13/r15 are not inputs to it -- they are loaded from the
+ * 64-bit TEB (gs:0x30) and the thread's CPU area (TEB+0x1488) on entry -- so a
+ * thread does not need those registers set by hand, it only needs its native
+ * RIP pointed at RunSimulatedCode's entry, wow64cpu!BTCpuSimulate (exported,
+ * so nameable; RunSimulatedCode is not). Sec 9 built exactly that redirect as
+ * a real 32-bit .exe on this project's win11 VM and it worked as far as user
+ * mode can be asked to prove: the clone's FS became 0x53-based-on-a-real-TEB
+ * (the fault this note's own child never got past), no exception of any kind
+ * was seen, and the thread settled at a 32-bit ntdll syscall stub rather than
+ * dying. What it had not done, as of that measurement, is come back and run
+ * ordinary code -- see the note at the end of this function for exactly how
+ * far short, and why this is kept and not wired into fork() yet.
+ *
+ * The redirect needs three things __clone_process does not:
+ *
+ *   a native (64-bit) CONTEXT on the clone's own initial thread, which this
+ *     32-bit process cannot get with its own ordinary NtGetContextThread/
+ *     NtSetContextThread -- those are thunked by wow64 down to the 32-bit
+ *     CPU-area CONTEXT, which is exactly what step C below still wants. The
+ *     native ones have to be called as 64-bit code, so a small heaven's-gate
+ *     trampoline (32->64->32, __gate_init/__gate_call below) makes the call
+ *     directly, bypassing the 32-bit wow64 thunk entirely.
+ *
+ *   the native VAs of NtGetContextThread, NtSetContextThread and
+ *     BTCpuSimulate -- all in the 64-bit ntdll.dll and wow64cpu.dll images
+ *     that share this process's address space above 4GB, which a 32-bit
+ *     pointer cannot name. Two ntdll32 exports resolve them: one for this
+ *     process's own 64-bit PEB, NtWow64QueryInformationProcess64, and one
+ *     for everything after that -- Ldr, the module list, each image's own
+ *     PE32+ export directory -- NtWow64ReadVirtualMemory64. Slots
+ *     NT_WOW64QINFO and NT_WOW64READVM resolve them. Every address involved
+ *     from here down is
+ *     genuinely 64 bits -- ntdll64 is ASLR'd independently and measured as
+ *     high as 0x00007ffb55110000 -- and this dialect has no 64-bit int, so
+ *     each one is carried as two ints (*_lo, *_hi) and added to with __qadd64,
+ *     which does the carry by hand rather than assume it away.
+ *
+ *   the redirect itself: a native NtSetContextThread call through the gate,
+ *     asking for Rip = BTCpuSimulate, Rsp = the thread's own already-native
+ *     Rsp, and SegCs = 0x33 -- then the ordinary (wow64-thunked)
+ *     NtSetContextThread already used everywhere else in this file, asked
+ *     for CONTEXT_INTEGER, with Eax
+ *     written to STATUS_PROCESS_CLONED -- which, per sec 8.2's disassembly of
+ *     wow64cpu!BTCpuSetContext, also forces the CPU area's status word bit 0,
+ *     the flag that makes the next RunSimulatedCode entry reprogram FS rather
+ *     than skip straight to 32-bit code with whatever was already there. */
+
+/* One 8-byte quantity, as (lo, hi). Adding a small positive RVA to a 64-bit
+ * base can carry into the high word even though every base and RVA here is
+ * itself a small positive number, so the carry is worked out from the bit
+ * pattern rather than assumed away: newlo = lo + delta wraps in two's
+ * complement exactly the way an unsigned add would, and XORing both sides
+ * with the sign bit before comparing turns that wrapped unsigned comparison
+ * into one this dialect's signed `<` gets right, because XORing the sign bit
+ * is a monotonic reordering from unsigned into signed. hi_out is a one-word
+ * scratch buffer the caller owns, matching how the rest of this file returns
+ * a second value: written, not returned. */
+int __qadd64(int lo, int hi, int delta, int* hi_out)
+{
+	int newlo;
+	int carry;
+
+	newlo = lo + delta;
+	carry = 0;
+	if((newlo ^ -2147483648) < (lo ^ -2147483648)) carry = 1;
+	hi_out[0] = hi + carry;
+	return newlo;
+}
+
+/* A real (non-pseudo) handle to this process, cached in a global because
+ * every 64-bit read this file makes wants one. NtWow64ReadVirtualMemory64
+ * and NtWow64QueryInformationProcess64 both answer STATUS_INVALID_HANDLE
+ * (0xc0000008) to -1, the NtCurrentProcess pseudo-handle every other Nt* call
+ * in this file accepts without complaint -- measured directly, with a gcc
+ * stand-in harness (/tmp/claude/wow64demo/m2check.c) that first came back
+ * with an all-zero PEB and no visible error, then, once __wow64_rd64 was
+ * made to report its own NTSTATUS, showed 0xc0000008 on every call until the
+ * pseudo-handle was swapped for a real one. NtDuplicateObject already does
+ * exactly this trick elsewhere in this file (__inheritable, above): given
+ * -1 as both the source and target process, and -1 as the source handle, it
+ * hands back a genuine handle value that means the same process. */
+int __wow64_self_handle_cache;
+int __wow64_self_handle_have;
+int __wow64_selfhandle()
+{
+	int (*NtDuplicateObject)(int, int, int, int, int, int, int);
+	int* out;
+
+	if(0 != __wow64_self_handle_have) return __wow64_self_handle_cache;
+
+	out = calloc(1, 4);
+	NtDuplicateObject = __ntdll(NT_DUP);
+	/* forwards: NtDuplicateObject(-1, -1, -1, out, 0, 0,
+	 *                             DUPLICATE_SAME_ACCESS) */
+	if(0 != NtDuplicateObject(2, 0, 0, out, -1, -1, -1)) return -1;
+	__wow64_self_handle_cache = out[0];
+	__wow64_self_handle_have = 1;
+	return out[0];
+}
+
+/* Read len bytes (at most 8, everything this file asks for) from the 64-bit
+ * address (lo, hi) of this same process's own 64-bit view, into buf, which
+ * the caller owns and which need only be as big as len. Returns the NTSTATUS
+ * from NtWow64ReadVirtualMemory64; a failure leaves buf whatever it was. */
+int __wow64_rd64(int lo, int hi, int* buf, int len)
+{
+	int (*NtWow64ReadVirtualMemory64)(int, int, int, int, int, int, int);
+	int* got;
+	int rc;
+	int self;
+
+	self = __wow64_selfhandle();
+	got = calloc(2, 4);
+	NtWow64ReadVirtualMemory64 = __ntdll(NT_WOW64READVM);
+	/* forwards: NtWow64ReadVirtualMemory64(self, lo, hi, buf, len, 0, got) --
+	 * everything read here is this process's own 64-bit view of itself, but
+	 * by the real handle above, not the -1 pseudo-handle. */
+	rc = NtWow64ReadVirtualMemory64(got, 0, len, buf, hi, lo, self);
+	return rc;
+}
+
+int __wow64_rd64_dword(int lo, int hi)
+{
+	int* v;
+
+	v = calloc(1, 4);
+	__wow64_rd64(lo, hi, v, 4);
+	return v[0];
+}
+
+int __wow64_rd64_word(int lo, int hi)
+{
+	int* v;
+
+	v = calloc(1, 4);
+	__wow64_rd64(lo, hi, v, 2);
+	return 65535 & v[0];
+}
+
+/* Walk this process's own 64-bit PEB -> Ldr -> InLoadOrderModuleList looking
+ * for a module named (in ASCII) `want`, matched against the wide
+ * BaseDllName one UTF-16 code unit at a time so that no wide string literal
+ * -- which would need embedded NUL bytes a C string literal cannot hold -- is
+ * needed on either side. Returns the module's base (lo), writes the high
+ * word to base_hi_out, or returns 0 (writing 0) if the list runs out first.
+ * LDR_DATA_TABLE_ENTRY64 offsets (InLoadOrderLinks +0x00, DllBase +0x30,
+ * BaseDllName.Length +0x58, BaseDllName.Buffer +0x60) and PEB64.Ldr (+0x18)
+ * are the standard ones photographed in wow64-clone-driver.md sec 9.2. */
+int __wow64_find_module(int peb_lo, int peb_hi, char* want, int* base_hi_out)
+{
+	int pebldr_lo; int pebldr_hi;
+	int ldr_lo; int ldr_hi;
+	int head_lo; int head_hi;
+	int cur_lo; int cur_hi;
+	int next_lo; int next_hi;
+	int base_lo; int base_hi;
+	int name_len;
+	int name_lo; int name_hi;
+	int guard;
+	int i;
+	int wc;
+	int match;
+
+	/* PEB64.Ldr is a pointer at +0x18; +0x18 never carries out of the low
+	 * word (a PEB address is never within 24 bytes of the top of the
+	 * address space), so the hi word of that intermediate address is the
+	 * PEB's own hi word, unchanged. */
+	pebldr_lo = __qadd64(peb_lo, peb_hi, 0x18, calloc(1,4));
+	pebldr_hi = peb_hi;
+	ldr_lo = __wow64_rd64_dword(pebldr_lo, pebldr_hi);
+	ldr_hi = __wow64_rd64_dword(__qadd64(pebldr_lo, pebldr_hi, 4, calloc(1,4)), pebldr_hi);
+	head_lo = __qadd64(ldr_lo, ldr_hi, 16, calloc(1,4));
+	head_hi = ldr_hi;         /* +0x10 never carries out of the low word either */
+	cur_lo = __wow64_rd64_dword(head_lo, head_hi);
+	cur_hi = __wow64_rd64_dword(__qadd64(head_lo, head_hi, 4, calloc(1,4)), head_hi);
+
+	guard = 0;
+	while(guard < 512)
+	{
+		if(cur_lo == head_lo)
+		{
+			if(cur_hi == head_hi) break;
+		}
+		if((0 == cur_lo) && (0 == cur_hi)) break;
+
+		base_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x30, calloc(1,4)), cur_hi);
+		base_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x34, calloc(1,4)), cur_hi);
+		name_len = __wow64_rd64_word(__qadd64(cur_lo, cur_hi, 0x58, calloc(1,4)), cur_hi);
+		name_lo = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x60, calloc(1,4)), cur_hi);
+		name_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 0x64, calloc(1,4)), cur_hi);
+
+		match = 1;
+		i = 0;
+		while(0 != want[i])
+		{
+			if((2 * i) >= name_len) { match = 0; break; }
+			wc = __wow64_rd64_word(__qadd64(name_lo, name_hi, 2 * i, calloc(1,4)), name_hi);
+			if(wc != want[i]) { match = 0; break; }
+			i = i + 1;
+		}
+		if(match)
+		{
+			if(name_len == (2 * i))
+			{
+				base_hi_out[0] = base_hi;
+				return base_lo;
+			}
+		}
+
+		/* InLoadOrderLinks.Flink, the first 8 bytes of the current node,
+		 * both halves read at the CURRENT node's address before either half
+		 * of cur_lo/cur_hi is overwritten -- reusing the just-updated low
+		 * word to address the high word would read the wrong place. */
+		next_lo = __wow64_rd64_dword(cur_lo, cur_hi);
+		next_hi = __wow64_rd64_dword(__qadd64(cur_lo, cur_hi, 4, calloc(1,4)), cur_hi);
+		cur_lo = next_lo;
+		cur_hi = next_hi;
+		guard = guard + 1;
+	}
+	base_hi_out[0] = 0;
+	return 0;
+}
+
+/* Resolve one export by name out of a PE32+ image at (base_lo, base_hi) in
+ * this process's own 64-bit view, over the same NtWow64ReadVirtualMemory64
+ * this file already uses for the module walk. IMAGE_NT_HEADERS64's export
+ * data directory is at +0x88 (the PE32+ optional header, wider than the
+ * PE32 one this file's own image uses), and the export directory's four
+ * arrays (NumberOfNames +24, AddressOfFunctions +28, AddressOfNames +32,
+ * AddressOfNameOrdinals +36) are the ordinary 32-bit-RVA ones documented for
+ * every PE image regardless of bitness -- RVAs stay 32 bits even inside a
+ * 64-bit image, so this part needs no carry logic beyond __qadd64 already
+ * doing it. */
+int __wow64_resolve_export(int base_lo, int base_hi, char* name, int* va_hi_out)
+{
+	int e_lfanew;
+	int nt_lo; int nt_hi;
+	int export_rva;
+	int num_names;
+	int addr_funcs; int addr_names; int addr_ords;
+	int i;
+	int name_rva;
+	int match;
+	int j;
+	int ch;
+	int ord;
+	int func_rva;
+
+	e_lfanew = __wow64_rd64_dword(__qadd64(base_lo, base_hi, 0x3C, calloc(1,4)), base_hi);
+	nt_lo = __qadd64(base_lo, base_hi, e_lfanew, calloc(1,4));
+	nt_hi = base_hi;
+	export_rva = __wow64_rd64_dword(__qadd64(nt_lo, nt_hi, 0x88, calloc(1,4)), nt_hi);
+	num_names  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 24, calloc(1,4)), base_hi);
+	addr_funcs = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 28, calloc(1,4)), base_hi);
+	addr_names = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 32, calloc(1,4)), base_hi);
+	addr_ords  = __wow64_rd64_dword(__qadd64(base_lo, base_hi, export_rva + 36, calloc(1,4)), base_hi);
+
+	i = 0;
+	while(i < num_names)
+	{
+		name_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_names + (4 * i), calloc(1,4)), base_hi);
+		match = 1;
+		j = 0;
+		while(0 != name[j])
+		{
+			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, calloc(1,4)), base_hi);
+			if((255 & ch) != name[j]) { match = 0; break; }
+			j = j + 1;
+		}
+		if(match)
+		{
+			ch = __wow64_rd64_word(__qadd64(base_lo, base_hi, name_rva + j, calloc(1,4)), base_hi);
+			if(0 == (255 & ch))
+			{
+				ord = __wow64_rd64_word(__qadd64(base_lo, base_hi, addr_ords + (2 * i), calloc(1,4)), base_hi);
+				func_rva = __wow64_rd64_dword(__qadd64(base_lo, base_hi, addr_funcs + (4 * ord), calloc(1,4)), base_hi);
+				va_hi_out[0] = base_hi;
+				return __qadd64(base_lo, base_hi, func_rva, va_hi_out);
+			}
+		}
+		i = i + 1;
+	}
+	va_hi_out[0] = 0;
+	return 0;
+}
+
+/* The heaven's-gate trampoline itself: a fixed 64-bit payload
+ * (x86_64-linux-gnu-as + objcopy -O binary of x86/Development's gate.S,
+ * bytes identical to /tmp/claude/wow64demo/gate.bin, validated on the win11
+ * VM per wow64-clone-driver.md sec 9.1) sitting in a page this process
+ * allocates PAGE_EXECUTE_READWRITE. Layout (byte offsets, matching gate.S's
+ * layout.inc, unchanged by the port from C to this dialect since it is
+ * machine code either way): 0x000 a 32-bit entry stub; 0x040 a data area of
+ * six 8-byte slots (Target, Arg1..Arg4, Result -- Arg5 unused here); 0x0C0 the
+ * 64-bit payload; 0x120 a 32-bit return stub. calloc already zeroes the page,
+ * so only the 89 non-zero bytes out of 289 are written here. */
+int __gate_init()
+{
+	int (*NtAllocateVirtualMemory)(int, int, int, int, int, int);
+	char* g;
+	int* base;
+	int* size;
+	int rc;
+
+	base = calloc(1, 4);
+	size = calloc(1, 4);
+	size[0] = 0x1000;
+	NtAllocateVirtualMemory = __ntdll(NT_ALLOC);
+	/* forwards: NtAllocateVirtualMemory(-1, base, 0, size, MEM_COMMIT|
+	 *   MEM_RESERVE, PAGE_EXECUTE_READWRITE) -- -1 is NtCurrentProcess: the
+	 *   gate lives in this same process, not the clone's. */
+	rc = NtAllocateVirtualMemory(0x40, 0x3000, size, 0, base, -1);
+	if(0 != rc) return 0;
+
+	g = base[0];
+	g[0x0] = 106; g[0x1] = 51; g[0x2] = 80; g[0x3] = 232;
+	g[0x8] = 88; g[0x9] = 5; g[0xa] = 184; g[0xe] = 135;
+	g[0xf] = 4; g[0x10] = 36; g[0x11] = 255; g[0x12] = 44;
+	g[0x13] = 36; g[0xc0] = 72; g[0xc1] = 131; g[0xc2] = 196;
+	g[0xc3] = 8; g[0xc4] = 72; g[0xc5] = 141; g[0xc6] = 29;
+	g[0xc7] = 117; g[0xc8] = 255; g[0xc9] = 255; g[0xca] = 255;
+	g[0xcb] = 72; g[0xcc] = 139; g[0xcd] = 75; g[0xce] = 8;
+	g[0xcf] = 72; g[0xd0] = 139; g[0xd1] = 83; g[0xd2] = 16;
+	g[0xd3] = 76; g[0xd4] = 139; g[0xd5] = 67; g[0xd6] = 24;
+	g[0xd7] = 76; g[0xd8] = 139; g[0xd9] = 75; g[0xda] = 32;
+	g[0xdb] = 72; g[0xdc] = 137; g[0xdd] = 224; g[0xde] = 72;
+	g[0xdf] = 131; g[0xe0] = 228; g[0xe1] = 240; g[0xe2] = 72;
+	g[0xe3] = 131; g[0xe4] = 236; g[0xe5] = 64; g[0xe6] = 72;
+	g[0xe7] = 137; g[0xe8] = 68; g[0xe9] = 36; g[0xea] = 56;
+	g[0xeb] = 72; g[0xec] = 139; g[0xed] = 67; g[0xee] = 40;
+	g[0xef] = 72; g[0xf0] = 137; g[0xf1] = 68; g[0xf2] = 36;
+	g[0xf3] = 32; g[0xf4] = 72; g[0xf5] = 139; g[0xf6] = 3;
+	g[0xf7] = 255; g[0xf8] = 208; g[0xf9] = 72; g[0xfa] = 139;
+	g[0xfb] = 100; g[0xfc] = 36; g[0xfd] = 56; g[0xfe] = 72;
+	g[0xff] = 137; g[0x100] = 67; g[0x101] = 48; g[0x102] = 72;
+	g[0x103] = 141; g[0x104] = 5; g[0x105] = 23; g[0x109] = 106;
+	g[0x10a] = 35; g[0x10b] = 80; g[0x10c] = 72; g[0x10d] = 203;
+	g[0x120] = 195;
+
+	return base[0];
+}
+
+/* __gate_invoke: cast gate to a cdecl void(void) and call it. Declared here
+ * and defined below __gate_call, which is the one caller needing it before
+ * its own definition -- this dialect resolves a call against whatever has
+ * been declared or defined so far, not against the whole file, the same way
+ * every forward reference in this port is handled. */
+int __gate_invoke(int gate);
+
+/* One call across the gate: target(a1, a2), both args and the target zero-
+ * extended to 64 bits (every target and argument this file passes is really
+ * 32 bits wide -- a HANDLE or a heap pointer of this process's own, or a VA
+ * this file already carries as (lo, hi) -- so hi halves are written 0 or the
+ * caller's own hi word directly). Returns the low 32 bits of the 64-bit
+ * result, which is all STATUS codes and everything else this file reads back
+ * ever need. */
+int __gate_call(int gate, int target_lo, int target_hi, int a1, int a1_hi, int a2, int a2_hi)
+{
+	int* data;
+
+	data = gate + 0x40;
+	data[0] = target_lo; data[1] = target_hi;
+	data[2] = a1; data[3] = a1_hi;
+	data[4] = a2; data[5] = a2_hi;
+	data[12] = -572662307;   /* 0xDCDCDCDC: a recognisable poison result, so a
+	                          * gate call that never touches Result reads back
+	                          * as obviously wrong rather than as a plausible
+	                          * STATUS_SUCCESS of 0. */
+
+	__gate_invoke(gate);
+
+	return data[12];
+}
+
+/* __gate_invoke: cast gate to a cdecl void(void) and call it. Split out of
+ * __gate_call only because this dialect's function-pointer declarations name
+ * their argument count, and the gate genuinely takes none -- everything it
+ * needs is already sitting in its own data area. */
+int __gate_invoke(int gate)
+{
+	int (*entry)();
+
+	entry = gate;
+	entry();
+	return 0;
+}
+
+/* This process's own 64-bit PEB address (PROCESS_BASIC_INFORMATION64.
+ * PebBaseAddress, at +8 into the 48-byte structure, class 0 --
+ * ProcessBasicInformation, the same class number the 32-bit
+ * NtQueryInformationProcess already used elsewhere in this file answers for
+ * the 32-bit view). Every module walk and export resolution below starts
+ * here. Returns the low word; writes the high word to hi_out, 0/0 on
+ * failure. */
+int __wow64_selfpeb(int* hi_out)
+{
+	int (*NtWow64QueryInformationProcess64)(int, int, int, int, int);
+	int* info;
+	int* retlen;
+	int self;
+	int rc;
+
+	info = calloc(12, 4);
+	retlen = calloc(1, 4);
+	self = __wow64_selfhandle();
+	NtWow64QueryInformationProcess64 = __ntdll(NT_WOW64QINFO);
+	/* forwards: NtWow64QueryInformationProcess64(self, 0, info, 48, retlen) --
+	 * self, not -1: see __wow64_selfhandle's note on __wow64_rd64 above,
+	 * which this same call was the other half of that measurement. */
+	rc = NtWow64QueryInformationProcess64(retlen, 48, info, 0, self);
+	if(0 != rc) { hi_out[0] = 0; return 0; }
+	hi_out[0] = info[3];
+	return info[2];
+}
+
+/* CONTEXT_AMD64 byte offsets used below (ContextFlags +0x30, SegCs +0x38,
+ * SegSs +0x42, EFlags +0x44, Rsp +0x98, Rip +0xF8), carried as word indices
+ * since this file addresses every buffer as int*: divide by 4. Values from
+ * mingw-w64's winnt.h struct _CONTEXT (x86_64), cross-checked in
+ * wow64-clone-driver.md sec 9.2/9.3 against a live read on the VM. The buffer
+ * is 0x4D0 bytes, same as demo.c's CTX_SIZE. */
+int __clone_process_wow64fix()
+{
+	int (*RtlCloneUserProcess)(int, int, int, int, int);
+	int (*NtResumeThread)(int, int);
+	int (*NtGetContextThread)(int, int);
+	int (*NtSetContextThread)(int, int);
+	int (*NtTerminateProcess)(int, int);
+	int (*NtWriteVirtualMemory)(int, int, int, int, int);
+	int* info;
+	int gate;
+	int* peb_hi;
+	int peb_lo;
+	int ntdll64_lo; int* ntdll64_hi;
+	int wow64cpu_lo; int* wow64cpu_hi;
+	int getctx_lo; int* getctx_hi;
+	int setctx_lo; int* setctx_hi;
+	int btcpu_lo; int* btcpu_hi;
+	int thread;
+	int* ctxA;
+	int* ctxB;
+	int rspA_lo; int rspA_hi;
+	int rtlclone_rva;
+	int lock_rva;
+	int lock_addr;
+	int* zero;
+	int* wrote;
+	int rc;
+	int i;
+
+	RtlCloneUserProcess = __ntdll(NT_CLONE);
+	if(NULL == RtlCloneUserProcess) return -1;
+
+	/* -- resolve everything the fix needs before touching the clone at all -- */
+	peb_hi = calloc(1, 4);
+	i = __wow64_selfpeb(peb_hi);        /* see below: NtWow64QueryInformationProcess64 */
+	peb_lo = i;
+	if((0 == peb_lo) && (0 == peb_hi[0])) return -1;
+
+	/* Everything from here down exists only because of WOW64: a 32-bit
+	 * process under a 64-bit kernel resumes a cloned thread directly in
+	 * 32-bit mode instead of through the 64-bit bring-up that would have
+	 * programmed its FS base and put it inside wow64cpu!RunSimulatedCode
+	 * (see __clone_process's own note, and wow64-clone-driver.md sec 1-2).
+	 * On genuine 32-bit Windows there is no 64-bit kernel underneath, no
+	 * simulator to enter, no compat-mode FS-base indirection to miss -- a
+	 * clone's thread gets its FS base the same native way any other 32-bit
+	 * thread does, so this whole defect class has nowhere to come from.
+	 * wow64cpu.dll not being findable in this process's own 64-bit module
+	 * list is the authoritative signal for that: it is not "the 64-bit-view
+	 * query failed" (checked separately above, and left a hard failure,
+	 * because that can fail on genuine WOW64 for reasons unrelated to which
+	 * Windows this is), it is "there is no second, 64-bit image of anything
+	 * loaded in this process at all" -- exactly the shape this file already
+	 * uses for NT_CLONE itself, whose own slot comment notes it stays 0 on
+	 * wine rather than erroring the caller out. Fall back to the plain
+	 * clone, the same one __clone_process above already is and which its own
+	 * note argues should just work without WOW64 in the way: no gate, no
+	 * 64-bit resolution, none of it. Not tested against real 32-bit Windows
+	 * -- this project has no such hardware or VM to test on -- so this is a
+	 * reasoned-through fallback shape, not a measured one. */
+	ntdll64_hi = calloc(1, 4);
+	ntdll64_lo = __wow64_find_module(peb_lo, peb_hi[0], "ntdll.dll", ntdll64_hi);
+	wow64cpu_hi = calloc(1, 4);
+	wow64cpu_lo = __wow64_find_module(peb_lo, peb_hi[0], "wow64cpu.dll", wow64cpu_hi);
+	if((0 == wow64cpu_lo) && (0 == wow64cpu_hi[0])) return __clone_process();
+	if((0 == ntdll64_lo) && (0 == ntdll64_hi[0])) return -1;
+
+	getctx_hi = calloc(1, 4);
+	getctx_lo = __wow64_resolve_export(ntdll64_lo, ntdll64_hi[0], "NtGetContextThread", getctx_hi);
+	setctx_hi = calloc(1, 4);
+	setctx_lo = __wow64_resolve_export(ntdll64_lo, ntdll64_hi[0], "NtSetContextThread", setctx_hi);
+	btcpu_hi = calloc(1, 4);
+	btcpu_lo = __wow64_resolve_export(wow64cpu_lo, wow64cpu_hi[0], "BTCpuSimulate", btcpu_hi);
+	if((0 == getctx_lo) && (0 == getctx_hi[0])) return -1;
+	if((0 == setctx_lo) && (0 == setctx_hi[0])) return -1;
+	if((0 == btcpu_lo) && (0 == btcpu_hi[0])) return -1;
+
+	gate = __gate_init();
+	if(0 == gate) return -1;
+
+	/* -- clone, suspended -- */
+	info = calloc(32, 4);
+	i = 0;
+	while(i < 32) { info[i] = 0; i = i + 1; }
+	info[0] = 68;
+	/* forwards: RtlCloneUserProcess(RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED,
+	 *                               NULL, NULL, NULL, info) */
+	rc = RtlCloneUserProcess(info, 0, 0, 0, 1);
+	if(0x129 == rc) return 0;   /* the clone ran with no fix at all -- never
+	                             * observed on this project's VM, kept as a
+	                             * cheap check in case a future Windows build
+	                             * no longer needs any of this. */
+	if(0 != rc) return -1;
+	thread = info[2];
+
+	/* -- Step A: native NtGetContextThread on the never-run initial thread -- */
+	ctxA = calloc(0x4D0 + 16, 1);
+	i = 0;
+	while(i < (0x4D0 / 4)) { ctxA[i] = 0; i = i + 1; }
+	ctxA[12] = 0x100007;              /* ContextFlags at +0x30: CONTROL|INTEGER|SEGMENTS */
+	rc = __gate_call(gate, getctx_lo, getctx_hi[0], thread, 0, ctxA, 0);
+	if(0 != rc)
+	{
+		NtTerminateProcess = __ntdll(NT_EXIT);
+		NtTerminateProcess(1, info[1]);
+		return -1;
+	}
+	rspA_lo = ctxA[0x98 / 4];
+	rspA_hi = ctxA[(0x98 / 4) + 1];
+
+	/* -- Step B: native NtSetContextThread, redirecting Rip -> BTCpuSimulate -- */
+	ctxB = calloc(0x4D0 + 16, 1);
+	i = 0;
+	while(i < (0x4D0 / 4)) { ctxB[i] = 0; i = i + 1; }
+	ctxB[12] = 0x100001;              /* CTXF_CONTROL: Rip/Rsp/SegCs/SegSs/EFlags */
+	ctxB[0xF8 / 4] = btcpu_lo; ctxB[(0xF8 / 4) + 1] = btcpu_hi[0];   /* Rip */
+	ctxB[0x98 / 4] = rspA_lo;  ctxB[(0x98 / 4) + 1] = rspA_hi;       /* Rsp: the thread's own */
+	i = ctxB[0x38 / 4]; ctxB[0x38 / 4] = (i & -65536) | 0x33;        /* SegCs, low 16 bits */
+	i = ctxB[0x40 / 4]; ctxB[0x40 / 4] = (i & 65535) | (0x2B * 65536); /* SegSs at +0x42 */
+	ctxB[0x44 / 4] = 0x202;           /* EFlags */
+	rc = __gate_call(gate, setctx_lo, setctx_hi[0], thread, 0, ctxB, 0);
+	if(0 != rc)
+	{
+		NtTerminateProcess = __ntdll(NT_EXIT);
+		NtTerminateProcess(1, info[1]);
+		return -1;
+	}
+
+	/* -- Step C: the ordinary (wow64-thunked) NtSetContextThread this file
+	 * already uses elsewhere, on the 32-bit CPU-area CONTEXT, asking only for
+	 * CONTEXT_INTEGER|CONTEXT_CONTROL|CONTEXT_SEGMENTS (0x10007, the same
+	 * CONTEXT_FULL fork() below already uses) with Eax forced to
+	 * STATUS_PROCESS_CLONED. wow64-clone-driver.md sec 8.2's disassembly of
+	 * BTCpuSetContext is why this is enough: asking for that flag set is what
+	 * makes it OR bit 0 into the CPU area's status word, which is the same
+	 * bit RunSimulatedCode's own entry tests to decide whether to reprogram
+	 * FS. Get first, so nothing already correct in the CPU-area CONTEXT
+	 * (Eip, Esp, the segment selectors) is stepped on -- only Eax changes. */
+	NtGetContextThread = __ntdll(NT_GETCONTEXT);
+	NtSetContextThread = __ntdll(NT_SETCONTEXT);
+	ctxA = calloc(0x2CC + 16, 1);
+	i = 0;
+	while(i < 179) { ctxA[i] = 0; i = i + 1; }
+	ctxA[0] = 0x10007;
+	rc = NtGetContextThread(ctxA, thread);
+	if(0 != rc)
+	{
+		NtTerminateProcess = __ntdll(NT_EXIT);
+		NtTerminateProcess(1, info[1]);
+		return -1;
+	}
+	ctxA[44] = 0x129;                 /* Eax at +0xB0 */
+	rc = NtSetContextThread(ctxA, thread);
+	if(0 != rc)
+	{
+		NtTerminateProcess = __ntdll(NT_EXIT);
+		NtTerminateProcess(1, info[1]);
+		return -1;
+	}
+
+	/* -- Step C.5: zero RtlCloneUserProcess's own internal SRW lock, in the
+	 * CHILD's copy, before it ever runs an instruction. wow64-clone-driver.md
+	 * sec 10's CFG walk of RtlCloneUserProcess (radare2 agf/pdf, not a linear
+	 * read) found the parent's own call -- CREATE_SUSPENDED, no
+	 * NO_SYNCHRONIZE -- takes the branch that does
+	 * RtlAcquireSRWLockExclusive(ntdll+0x12d534) then
+	 * RtlAcquireSRWLockExclusive(ntdll+0x12d52c), in that order, and holds
+	 * BOTH across the NtCreateUserProcess syscall inside it, releasing them
+	 * only on the parent's own return path. The child's branch (taken when
+	 * Eax==STATUS_PROCESS_CLONED, which Step C just wrote) reinitialises and
+	 * releases +0x12d534 by itself, unconditionally -- so that one is
+	 * self-healing regardless of what this function does. It never releases
+	 * +0x12d52c first, though, before reaching
+	 * RtlAcquireReleaseSRWLockExclusive(ntdll+0x12d52c) a few instructions
+	 * later -- an acquire-then-release memory-barrier call that blocks
+	 * forever on a lock nothing in this process will ever Release, because
+	 * the release for it belongs to a branch the child does not take. That
+	 * is the wait this function's own note below used to end at
+	 * (NtWaitForAlertByThreadId, parked, unchanging). This is not the same
+	 * lock as the one a previous version of this note zeroed and found no
+	 * effect from (ntdll+0x12d7a4, a third SRW lock acquired earlier in the
+	 * same preamble and, like +0x12d534, unconditionally fixed up by the
+	 * child's own code either way) -- that null result is exactly what this
+	 * CFG reading predicts, since +0x12d7a4 was never the one the child gets
+	 * stuck on.
+	 *
+	 * ntdll.dll carries no relocations for this component (confirmed
+	 * unchanging across repeated runs, wow64-clone-driver.md sec 9.2), so the
+	 * parent's own already-resolved RtlCloneUserProcess pointer and this
+	 * process's own copy of ntdll.dll sit at the same offset from each other
+	 * as the child's do; RtlCloneUserProcess's RVA (0xbaa60) and the lock's
+	 * RVA (0x12d52c), both measured this session against the exact ntdll.dll
+	 * pulled off the VM, get from one to the other without ever naming
+	 * ntdll's base directly. NtWriteVirtualMemory here is the same call
+	 * __fork_write below wraps for fork()'s own copy into a child; it is
+	 * inlined rather than shared because __fork_write is declared later in
+	 * this file than this function is. info[1] is the child's process
+	 * handle (RTL_USER_PROCESS_INFORMATION.Process), the same field fork()'s
+	 * own note reads. */
+	rtlclone_rva = 0xbaa60;
+	lock_rva = 0x12d52c;
+	lock_addr = RtlCloneUserProcess - rtlclone_rva + lock_rva;
+	zero = calloc(1, 4);
+	zero[0] = 0;
+	wrote = calloc(1, 4);
+	NtWriteVirtualMemory = __ntdll(NT_WRITEVM);
+	/* forwards: NtWriteVirtualMemory(info[1], lock_addr, zero, 4, wrote) */
+	rc = NtWriteVirtualMemory(wrote, 4, zero, lock_addr, info[1]);
+	if(0 != rc)
+	{
+		NtTerminateProcess = __ntdll(NT_EXIT);
+		NtTerminateProcess(1, info[1]);
+		return -1;
+	}
+
+	/* -- Step D: let it go -- */
+	NtResumeThread = __ntdll(NT_RESUME);
+	/* forwards: NtResumeThread(thread, NULL) */
+	NtResumeThread(0, thread);
+
+	return info[1];
+}
+
+/* Measured on this project's win11 VM (wow64-clone-driver.md sec 9.3-9.4):
+ * every step above took -- Step A read back a sane native context, Step B's
+ * Rip/SegCs read back exactly as written, Step C's Eax read back 0x129 --
+ * and the clone, resumed, threw no exception at all across two 3-4 second
+ * observation windows: no fs:[0x18] fault, no r15-dispatch fault, nothing.
+ * Its 32-bit SegFs was 0x53 with a real base behind it -- the fault this
+ * whole file's __clone_process note ends on -- and it settled at a 32-bit
+ * ntdll syscall stub (measured at ntdll+0x77f70, NtWaitForAlertByThreadId)
+ * with an identical context on a second look 3-4 seconds later: parked, not
+ * crashing, not making progress either.
+ *
+ * A follow-up measurement that same session (zeroing the loader-lock SRW at
+ * ntdll+0x12d7a4 in the child before resuming, the same falsifiable test
+ * __clone_process's own note already ran against the unfixed clone) changed
+ * nothing: identical Eip/Esp/SegFs with or without it.
+ *
+ * The next session found why, by disassembling RtlCloneUserProcess with
+ * radare2's CFG-aware graph mode (agf), not the linear pd dump the earlier
+ * static-analysis pass had used -- the function is only 475 bytes and the
+ * whole of it, branches included, fits on one screen once read that way.
+ * With RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED (1) and no NO_SYNCHRONIZE,
+ * the *parent's own call* takes the branch that does
+ * RtlAcquireSRWLockExclusive(ntdll+0x12d534) then
+ * RtlAcquireSRWLockExclusive(ntdll+0x12d52c) -- a different lock from the
+ * one this note zeroed last session -- and holds both across the
+ * NtCreateUserProcess syscall inside it, releasing them only on its own
+ * (Eax != STATUS_PROCESS_CLONED) return path. The child's branch
+ * (Eax == STATUS_PROCESS_CLONED, which Step C forces) reinitialises and
+ * releases +0x12d534 unconditionally, by itself -- so zeroing +0x12d7a4
+ * last session touched neither lock that actually mattered, which is why it
+ * changed nothing. But the child's branch never releases +0x12d52c before
+ * reaching RtlAcquireReleaseSRWLockExclusive(ntdll+0x12d52c) a few
+ * instructions later -- an acquire-then-release memory-barrier call, on a
+ * lock the parent left held, that nothing in the child process will ever
+ * Release, because the release for it belongs to the branch the child does
+ * not take. That is the wait this note used to end at: not a reading, a
+ * traced control-flow fact.
+ *
+ * Step C.5 above tests it the same way __clone_process's own note tested the
+ * loader lock: zero the raw bytes and see what changes. Confirmed live, this
+ * session, on win11 (two independent runs, identical result): before the
+ * zero, the child parked forever, as recorded above. After it -- with
+ * nothing else about steps A-D touched -- the child ran. The debugger
+ * attached in the test harness saw real LOAD_DLL events beyond the
+ * synthetic attach catch-up, a CREATE_THREAD/EXIT_THREAD pair, one
+ * first-chance STATUS_INVALID_HANDLE (0xc0000008, the kind of otherwise-
+ * silent handle-table noise a debugger attach turns visible, not a sign of
+ * failure), and then EXIT_PROCESS with code 0x77 -- which is reachable in
+ * that test harness (probe4.c, kept locally per the task's instructions,
+ * not in this tree) from exactly one place: `if (cst ==
+ * STATUS_PROCESS_CLONED) ExitProcess(0x77);`, the harness's own
+ * fork()-shaped child branch, taken immediately after RtlCloneUserProcess
+ * itself returns 0x129 into the harness's C code. That is unambiguous: the
+ * child ran genuine 32-bit C past the clone, correctly took the child
+ * branch, and exited exactly as told. Both walls fall, the lock releases
+ * cleanly, and the clone reaches ordinary running code -- not just "no more
+ * exceptions."
+ *
+ * This is why the function is wired into fork() below now, ahead of the
+ * spawn+copy path, whenever NT_CLONE resolves (RtlCloneUserProcess exists;
+ * the slot comment already notes it is absent on Wine). A failure return
+ * here after the clone succeeds terminates the half-set-up child first, so
+ * falling back to spawn+copy never leaves an orphaned suspended process
+ * behind. The spawn+copy path itself is untouched and is still what runs
+ * whenever NT_CLONE fails to resolve, or whenever this function returns -1
+ * for any other reason. */
 
 /* This process's own image path, out of the PEB, narrowed the way everything
  * else in this port narrows.  fork needs it because the only way to get a
@@ -1206,6 +1948,22 @@ int fork()
 	int spins;
 	int rc;
 	int i;
+	int wow64fix_rc;
+
+	/* __clone_process_wow64fix above is the real fork() Windows almost has:
+	 * one syscall, whole address space, no second process started from
+	 * scratch. Preferred whenever it can run at all -- it already returns -1
+	 * immediately, before touching anything, if NT_CLONE did not resolve
+	 * (RtlCloneUserProcess absent, e.g. on Wine per the slot's own comment),
+	 * so this is exactly "preferred when NT_CLONE resolves" without probing
+	 * the slot twice. It also cleans up any suspended child it created
+	 * before returning -1 for any other reason, so falling through to the
+	 * spawn+copy path below never starts it behind an orphaned process. What
+	 * it returns otherwise -- 0 in the child, the child's PID in the parent
+	 * -- is already exactly what fork() promises, so it is handed straight
+	 * back. */
+	wow64fix_rc = __clone_process_wow64fix();
+	if(-1 != wow64fix_rc) return wow64fix_rc;
 
 	/* Where fork returns to, written down before there is a child to send
 	 * there.  Nothing comes back into fork on the child's side: the child is

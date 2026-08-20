@@ -63,6 +63,8 @@ NTDLL = [
     ("fn_writevm",    "NtWriteVirtualMemory",         "fork: copy this process's memory into that child"),
     ("fn_readvm",     "NtReadVirtualMemory",          "fork: watch for the child to say it has parked"),
     ("fn_suspend",    "NtSuspendThread",              "fork: stop that child before overwriting it"),
+    ("fn_wow64qinfo", "NtWow64QueryInformationProcess64", "wow64 clone fix: this process's own 64-bit PEB address"),
+    ("fn_wow64readvm","NtWow64ReadVirtualMemory64",   "wow64 clone fix: read the 64-bit ntdll/wow64cpu images to resolve BTCpuSimulate"),
 ]
 
 def emit_shared(a):

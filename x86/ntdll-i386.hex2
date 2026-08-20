@@ -429,6 +429,14 @@
 	53                          ; push ebx                    # module_base
 	E8 %resolve_export          ; call resolve_export
 	A3 &fn_suspend              ; mov [fn_suspend], eax
+	68 &name_NtWow64QueryInformationProcess64 ; push name_NtWow64QueryInformationProcess64
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_wow64qinfo           ; mov [fn_wow64qinfo], eax
+	68 &name_NtWow64ReadVirtualMemory64 ; push name_NtWow64ReadVirtualMemory64
+	53                          ; push ebx                    # module_base
+	E8 %resolve_export          ; call resolve_export
+	A3 &fn_wow64readvm          ; mov [fn_wow64readvm], eax
 	C3                          ; ret
 
 # open_argv(): argv[1] opened for reading, argv[2] created or truncated for
@@ -550,6 +558,12 @@
 :name_NtSuspendThread
 4E 74 53 75 73 70 65 6E 64 54 68 72 65 61 64 00 # name_NtSuspendThread = "NtSuspendThread"
 
+:name_NtWow64QueryInformationProcess64
+4E 74 57 6F 77 36 34 51 75 65 72 79 49 6E 66 6F 72 6D 61 74 69 6F 6E 50 72 6F 63 65 73 73 36 34 00 # name_NtWow64QueryInformationProcess64 = "NtWow64QueryInformationProcess64"
+
+:name_NtWow64ReadVirtualMemory64
+4E 74 57 6F 77 36 34 52 65 61 64 56 69 72 74 75 61 6C 4D 65 6D 6F 72 79 36 34 00 # name_NtWow64ReadVirtualMemory64 = "NtWow64ReadVirtualMemory64"
+
 :fn_table
 
 # Resolved routine addresses.  Kept in memory because eight will not fit in registers.
@@ -639,6 +653,12 @@
 
 :fn_suspend
 00 00 00 00                     # fn_suspend: slot 28, resolved NtSuspendThread -- fork: stop that child before overwriting it
+
+:fn_wow64qinfo
+00 00 00 00                     # fn_wow64qinfo: slot 29, resolved NtWow64QueryInformationProcess64 -- wow64 clone fix: this process's own 64-bit PEB address
+
+:fn_wow64readvm
+00 00 00 00                     # fn_wow64readvm: slot 30, resolved NtWow64ReadVirtualMemory64 -- wow64 clone fix: read the 64-bit ntdll/wow64cpu images to resolve BTCpuSimulate
 
 # Arguments that must survive the RtlDosPathNameToNtPathName_U call.
 :g_access
