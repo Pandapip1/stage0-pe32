@@ -417,6 +417,19 @@ DEFINE test_ebx,ebx 85DB
 	ret
 
 
+# __peb function
+# Receives nothing
+# Returns this process's PEB
+#
+# fs:0x30 is TEB->PEB, the same field _start_main and __stdslot already read
+# by hand above; a named function for it is what M2libc-windows/ntdll.c's
+# __ntdll_find_module walks from to resolve routines by name instead of by
+# the fixed slot table resolve_all fills in.
+:__peb
+	mov_eax,[fs:DWORD] %0x30
+	ret
+
+
 # __fork_setjmp function
 # Receives nothing, and must be called from fork itself and nowhere else
 # Returns 0, always
