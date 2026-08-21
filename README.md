@@ -42,10 +42,10 @@ reading, from the bottom up.
 ## Building
 
 Clone with submodules -- from cc_x86 up, the build compiles C, and M2-Planet,
-M2libc and mescc-tools are vendored as submodules rather than by hand.
-M2-Planet is upstream's exactly as upstream wrote it; M2libc and mescc-tools
-are forks, and each carries one Windows-shaped change that is described where
-it matters below:
+M2libc, mescc-tools and mescc-tools-extra are vendored as submodules rather
+than by hand.  M2-Planet and mescc-tools-extra are upstream's exactly as
+upstream wrote them; M2libc and mescc-tools are forks, and each carries one
+Windows-shaped change that is described where it matters below:
 
     git clone --recurse-submodules <this repo>
 
@@ -134,7 +134,13 @@ C it compiles first is M2-Planet's own: `M2-Planet/`, `M2libc/` and
 `mescc-tools/` are git submodules, pinned at or just above the exact commits
 stage0-posix itself vendors them at. Almost nothing in them is
 Windows-specific: M2-Planet needs nothing at all, mescc-tools needs two lines
-in kaem, and M2libc needs the `x86/windows/` target this project wrote. `x86/libc-core.M1` and `M2libc/x86/windows/bootstrap.c` are
+in kaem, and M2libc needs the `x86/windows/` target this project wrote.
+
+`mescc-tools-extra/` is vendored at the same commit and for the same reason,
+and nothing in it needed porting at all. It is not part of the chain -- no
+link below hex2-new uses it -- but mkdir, cp, chmod and the unpackers are what
+anything built on top of the chain reaches for once it has a compiler, and
+they are ordinary C standing on the same M2libc. `x86/libc-core.M1` and `M2libc/x86/windows/bootstrap.c` are
 what M2-Planet and M1-macro compile against instead of
 `M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit plumbing a C program
 needs, standing on `x86/ntdll-i386.hex2` the same way `x86/cc_x86.M1` does. See

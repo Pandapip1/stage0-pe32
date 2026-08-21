@@ -7,3 +7,6 @@
 [submodule "mescc-tools"]
 	path = mescc-tools
 	url = https://github.com/Pandapip1/mescc-tools.git
+[submodule "mescc-tools-extra"]
+	path = mescc-tools-extra
+	url = https://github.com/oriansj/mescc-tools-extra
