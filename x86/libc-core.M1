@@ -72,11 +72,14 @@
 #   +0x00000   argv, 256 pointers
 #   +0x00400   the argument strings themselves
 #   +0x08000   one path, widened to UTF-16 for ntdll
-#   +0x10000   the heap, which is where malloc starts
+#   +0x10000   envp, 1024 pointers
+#   +0x11000   the environment strings themselves
+#   +0x20000   the heap, which is where malloc starts
 #
 # Nothing checks these bounds.  A command line of more than 256 arguments or
-# 31KB, or a path of more than 2048 characters, would run past its own area,
-# and this is the layer below the one that could report it.
+# 31KB, a path of more than 2048 characters, or an environment of more than
+# 1024 entries or 60KB, would run past its own area, and this is the layer
+# below the one that could report it.
 
 
 # Instructions M2libc/x86/x86_defs.M1 does not already name.  A duplicate
@@ -86,11 +89,13 @@ DEFINE add_ebx, 81C3
 DEFINE add_ecx, 81C1
 DEFINE add_edi, 81C7
 DEFINE add_edx, 81C2
+DEFINE add_esi, 81C6
 DEFINE call_[DWORD] FF15
 DEFINE cmp_eax, 83F8
 DEFINE jg 0F8F
 DEFINE js 0F88
 DEFINE mov_al,[edx] 8A02
+DEFINE mov_al,[esi] 8A06
 DEFINE mov_ebp, BD
 DEFINE mov_ebx,ebp 89EB
 DEFINE mov_ecx, B9
@@ -134,8 +139,15 @@ DEFINE test_ebx,ebx 85DB
 # cc_x86 gives a function its arguments below the frame pointer: the first at
 # ebp-4, the second at ebp-8, and so on, with the return address below those
 # and main's own locals below that.  So the three words pushed here, in this
-# order, are what main reads as argc, argv and envp.  The environment is a
-# pointer to a NULL, because nothing in this chain reads one.
+# order, are what main reads as argc, argv and envp.
+#
+# Nothing in the chain itself reads an environment -- the .cmd script passes
+# every path as an argument -- and for a long time this pushed a pointer to a
+# NULL and said so.  kaem does read one: a kaem script names what it runs
+# through ${variables}, and nova-nix, which drives this bootstrap from
+# outside, puts every path it wants used in the environment rather than on a
+# command line.  So the block is walked for real now, and costs nine
+# instructions in a program that does not care.
 :_start
 	call %resolve_all                           ; Find ntdll and resolve what we need from it
 	call %__libc_init                           ; Whatever the C library above wants set up
@@ -209,9 +221,49 @@ DEFINE test_ebx,ebx 85DB
 	mov_eax, %0
 	mov_[ebx],eax                               ; argv[argc] = NULL, which main tests for
 
+	;; The environment.  Windows keeps it in the process parameters as one
+	;; block of UTF-16, each entry ended by a zero and a second zero after
+	;; the last, so this is the same narrowing loop as above with a
+	;; different way of knowing when to stop.
+	;;
+	;; ECX still holds argc and EBP still holds argv; nothing below writes
+	;; either.
+	mov_eax,[fs:DWORD] %0x30                    ; TEB->PEB
+	mov_eax,[eax+BYTE] !16                      ; PEB->ProcessParameters
+	mov_esi,[eax+BYTE] !72                      ; ->Environment, at 0x48
+
+	mov_ebx, &PE_end
+	add_ebx, %0x10000                           ; ENVP, the array of pointers
+	mov_edi, &PE_end
+	add_edi, %0x11000                           ; and the strings, after 1024 slots
+
+:_start_env_entry
+	mov_al,[esi]                                ; The first byte of the next entry
+	test_al,al
+	je %_start_env_done                         ; A zero where an entry starts ends the block
+
+	mov_[ebx],edi                               ; envp[n] = where its narrow copy goes
+	add_ebx, %4
+
+:_start_env_narrow
+	mov_al,[esi]
+	mov_[edi],al
+	add_edi, %1
+	add_esi, %2                                 ; UTF-16 advances two bytes at a time
+	test_al,al                                  ; Check for the NUL
+	jne %_start_env_narrow                      ; Which is copied and then ends the entry
+	jmp %_start_env_entry                       ; On to the next one
+
+:_start_env_done
+	mov_eax, %0
+	mov_[ebx],eax                               ; envp[n] = NULL, which getenv stops at
+
+	mov_ebx, &PE_end
+	add_ebx, %0x10000                           ; envp, the array just built
+
 	push_ecx                                    ; argc, which main reads at ebp-4
 	push_ebp                                    ; argv, at ebp-8
-	push_ebx                                    ; envp, at ebp-12: the NULL just written
+	push_ebx                                    ; envp, at ebp-12
 	mov_ebp,esp
 	add_ebp, %12                                ; ebp is 4 above the argc that was pushed first
 	call %FUNCTION_main
@@ -399,7 +451,7 @@ DEFINE test_ebx,ebx 85DB
 # Returns the first address malloc may hand out
 :__heap_start
 	mov_eax, &PE_end
-	add_eax, %0x10000                           ; Past the arguments and the path buffer
+	add_eax, %0x20000                           ; Past the arguments, the path buffer and the environment
 	ret
 
 
