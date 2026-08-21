@@ -85,6 +85,7 @@ rem drops --bootstrap-mode, which in turn means the full M2libc rather than
 rem M2libc-windows\bootstrap.c: stdio.c's FILE and its buffering, standing on
 rem the POSIX layer in M2libc-windows\{unistd,fcntl,sys\stat}.c.
 "%ART%\M2.exe" --architecture x86 ^
+	-D __windows__=1 ^
 	-f "%HERE%..\M2libc\sys\types.h" ^
 	-f "%HERE%..\M2libc\stddef.h" ^
 	-f "%HERE%..\M2libc\sys\utsname.h" ^

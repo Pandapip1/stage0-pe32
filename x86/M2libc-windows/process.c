@@ -1887,12 +1887,8 @@ int __clone_process_wow64fix()
 	 * as the child's do; RtlCloneUserProcess's RVA (0xbaa60) and the lock's
 	 * RVA (0x12d52c), both measured this session against the exact ntdll.dll
 	 * pulled off the VM, get from one to the other without ever naming
-	 * ntdll's base directly. NtWriteVirtualMemory here is the same call
-	 * __fork_write below wraps for fork()'s own copy into a child; it is
-	 * inlined rather than shared because __fork_write is declared later in
-	 * this file than this function is. child (info[1]) is the child's
-	 * process handle (RTL_USER_PROCESS_INFORMATION.Process), the same field
-	 * fork()'s own note reads. */
+	 * ntdll's base directly. child (info[1]) is the child's process handle
+	 * (RTL_USER_PROCESS_INFORMATION.Process). */
 	rtlclone_rva = 0xbaa60;
 	lock_rva = 0x12d52c;
 	lock_addr = RtlCloneUserProcess - rtlclone_rva + lock_rva;
@@ -2031,343 +2027,30 @@ char* __self_path()
 	return out;
 }
 
-/* One span of this process's memory, written into another process.  fork
- * calls this with src and dst the same number, which is the whole trick: see
- * below. */
-int __fork_write(int proc, int dst, int src, int len)
-{
-	int (*NtWriteVirtualMemory)(int, int, int, int, int);
-	int* wrote;
-	int rc;
-
-	if(0 >= len) return 0;
-	wrote = calloc(1, 4);
-	NtWriteVirtualMemory = __ntdll(NT_WRITEVM);
-	/* forwards: NtWriteVirtualMemory(proc, dst, src, len, wrote) */
-	rc = NtWriteVirtualMemory(wrote, len, src, dst, proc);
-	return rc;
-}
-
-/* One word out of another process.  The caller passes the scratch for the
- * count as well as the buffer, because the one caller reads in a loop and a
- * calloc per turn of it would leak a word a time into the very heap it is
- * about to copy. */
-int __fork_peek(int proc, int addr, int* out, int* got)
-{
-	int (*NtReadVirtualMemory)(int, int, int, int, int);
-	int rc;
-
-	NtReadVirtualMemory = __ntdll(NT_READVM);
-	/* forwards: NtReadVirtualMemory(proc, addr, out, 4, got) */
-	rc = NtReadVirtualMemory(got, 4, out, addr, proc);
-	return rc;
-}
-
-/* fork, by starting this program again and then overwriting the copy.
+/* fork: __clone_process_wow64fix, and nothing behind it.
  *
- * Windows has a fork primitive and it does not work; the whole of why is
- * written up at __clone_process, and none of it is fixable from user mode.
- * What is left is the way Cygwin has always done it, and it works here for a
- * reason particular to this bootstrap rather than to Cygwin's cleverness.
+ * __clone_process_wow64fix is the real fork() Windows almost has: one
+ * syscall, whole address space, no second process started from scratch, no
+ * assumption that this program's own image sits at a fixed, unrelocated
+ * address. Measured running four different real programs to correct
+ * completion (x86/Development/fork-test.c and friends) -- not merely
+ * fault-free -- and that measurement is what earned it fork()'s whole job.
  *
- * The reason is that every program this chain builds is one section at a fixed
- * address.  x86/PE32-i386.hex2 sets IMAGE_FILE_RELOCS_STRIPPED and does not
- * set DYNAMIC_BASE, so there is no relocation and no address-space layout
- * randomisation: the image is at 0x400000 in every process that runs it, it
- * runs to 128MB with code, data and heap all inside it and all writable, and
- * even the stack the kernel hands out lands at the same address every time.
- * So a second copy of this same program is laid out identically to the first,
- * and copying memory from one into the other needs no fixups of any kind -- a
- * pointer means the same thing on both sides, because it points at the same
- * offset of the same image mapped at the same place.  A program built the
- * ordinary way, relocatable and randomised, could not do this.  This one can
- * only do it.
- *
- * That the stacks coincide is what makes the child's locals and its whole
- * chain of callers real without a single fixup, and it is also the one thing
- * that has to be worked around: the child has its own loader init to run, on
- * that same stack, before it can be trusted with anything.  So the child is
- * made to run all of its own startup first and then stop dead:
- *
- *   __fork_setjmp writes down where the caller would have carried on.
- *   The same program is started again, suspended -- a process Windows made in
- *     the ordinary way, so its thread has everything the clone's never had:
- *     an FS base the kernel programmed, the WOW64 registers its own bring-up
- *     will set, a stack, a PEB.
- *   Before letting it go, one word is written into it: the flag _start reads
- *     to learn it is a fork child.  It is the only thing that distinguishes
- *     this child from an ordinary run of the same program.
- *   It is let go, does its loader init, resolves ntdll, sets up the C library,
- *     and then parks in a spin rather than calling main, saying so in a second
- *     word the parent watches.  Its startup is over and its stack is finished
- *     with.
- *   It is suspended, and everything from the image base to the top of the heap
- *     is copied into it -- every global and every byte malloc has handed out,
- *     at the addresses they already have -- and then the parent's committed
- *     stack, at its own address, over the top of the child's spent one.
- *   Its thread is pointed at what __fork_setjmp wrote down, with EAX set to 1,
- *     and let go.
- *
- * It comes up believing it has just returned from __fork_setjmp, on its
- * parent's stack, with its parent's memory, and returns 0 from here.  The
- * parent gets the child's process handle, which is what this port calls a pid.
- *
- * What this leans on, and what would break it:
- *
- *   ntdll is at one address for a whole boot, shared by every process, so the
- *   routine addresses resolve_all found in the parent are the same numbers in
- *   the child.  The child resolves them again anyway, before it parks, and is
- *   then given the parent's copies on top; the two agree.
- *
- *   A file the parent had open is open in the child, at the same descriptor,
- *   which is the whole reason open_file asks for OBJ_INHERIT: an inheritable
- *   handle is the one kind a child receives, and it receives it under the
- *   same number -- which is what keeps the number the copied memory is
- *   holding meaningful.  POSIX hands every descriptor to a child across both
- *   fork and exec unless it is marked FD_CLOEXEC, and there is no FD_CLOEXEC
- *   here to ask for the other behaviour.
- *
- *   The child is a second process, so it has its own pid and its own parent as
- *   far as Windows is concerned.  Nothing that asks Windows rather than this
- *   library will see a fork.
- *
- * fork's children are not waited for here.  waitpid takes what this returns. */
+ * There used to be a fallback here: start this same program again and
+ * overwrite the copy, the way Cygwin has always done it, working only
+ * because this bootstrap's images sit at one fixed, unrelocated address in
+ * every process (x86/PE32-i386.hex2 sets IMAGE_FILE_RELOCS_STRIPPED and no
+ * DYNAMIC_BASE) -- so a pointer meant the same thing in both copies with no
+ * fixups needed. It is gone, not merely unused: it was also the only thing
+ * that made fork() work on Wine, where RtlCloneUserProcess is not exported
+ * at all (NT_CLONE's own slot comment) and __clone_process_wow64fix's first
+ * check fails before anything else runs. A caller on Wine gets -1 from
+ * fork() now. That is a real loss of what used to work there, traded
+ * deliberately for one path instead of two to reason about everywhere
+ * else -- not an oversight, and recoverable from git history if Wine
+ * support is ever worth the second path again. */
 int fork()
 {
-	int (*NtGetContextThread)(int, int);
-	int (*NtSetContextThread)(int, int);
-	int (*NtResumeThread)(int, int);
-	int (*NtSuspendThread)(int, int);
-	int (*NtTerminateProcess)(int, int);
-	int (*NtAllocateVirtualMemory)(int, int, int, int, int, int);
-	int (*NtClose)(int);
-	char* path;
-	char** argv;
-	int* info;
-	int* teb;
-	int* ctx;
-	int* one;
-	int* seen;
-	int* got;
-	int* base;
-	int* size;
-	int ctx_raw;
-	int stack_low;
-	int stack_high;
-	int stack_len;
-	int heap_top;
-	int child;
-	int thread;
-	int flag_at;
-	int parked_at;
-	int spins;
-	int rc;
-	int i;
-	int wow64fix_rc;
-
-	/* __clone_process_wow64fix above is the real fork() Windows almost has:
-	 * one syscall, whole address space, no second process started from
-	 * scratch. Preferred whenever it can run at all -- it already returns -1
-	 * immediately, before touching anything, if NT_CLONE did not resolve
-	 * (RtlCloneUserProcess absent, e.g. on Wine per the slot's own comment),
-	 * so this is exactly "preferred when NT_CLONE resolves" without probing
-	 * the slot twice. It also cleans up any suspended child it created
-	 * before returning -1 for any other reason, so falling through to the
-	 * spawn+copy path below never starts it behind an orphaned process. What
-	 * it returns otherwise -- 0 in the child, the child's PID in the parent
-	 * -- is already exactly what fork() promises, so it is handed straight
-	 * back. */
-	wow64fix_rc = __clone_process_wow64fix();
-	if(-1 != wow64fix_rc) return wow64fix_rc;
-
-	/* Where fork returns to, written down before there is a child to send
-	 * there.  Nothing comes back into fork on the child's side: the child is
-	 * started in fork's caller, with fork already returned and 0 in EAX. */
-	__fork_setjmp();
-
-	path = __self_path();
-	if(NULL == path) return -1;
-
-	argv = calloc(2, 4);
-	argv[0] = path;
-	argv[1] = NULL;
-
-	info = calloc(32, 4);
-	child = __spawn_suspended(path, argv, NULL, info);
-	if(0 >= child) return -1;
-	thread = info[2];
-
-	NtTerminateProcess = __ntdll(NT_EXIT);
-	NtResumeThread = __ntdll(NT_RESUME);
-
-	/* Tell it what it is, before it has run an instruction. */
-	one = calloc(1, 4);
-	one[0] = 1;
-	flag_at = __fork_flagaddr();
-	rc = __fork_write(child, flag_at, one, 4);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* Let it run its own startup, all the way to the spin in _start. */
-	NtResumeThread(0, thread);
-
-	parked_at = __fork_parkedaddr();
-	seen = calloc(1, 4);
-	seen[0] = 0;
-	got = calloc(1, 4);
-	spins = 0;
-	while(0 == seen[0])
-	{
-		rc = __fork_peek(child, parked_at, seen, got);
-		if(0 != rc)
-		{
-			NtTerminateProcess(1, child);
-			return -1;
-		}
-		spins = spins + 1;
-		if(spins > 100000000)
-		{
-			/* It should take microseconds.  Something is wrong. */
-			NtTerminateProcess(1, child);
-			return -1;
-		}
-	}
-
-	/* Parked.  Stop it before touching anything it is standing on. */
-	NtSuspendThread = __ntdll(NT_SUSPEND);
-	/* forwards: NtSuspendThread(thread, NULL) */
-	rc = NtSuspendThread(0, thread);
-	if(0 > rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* CONTEXT is 0x2cc bytes and the kernel insists on 16-byte alignment. */
-	ctx_raw = calloc(0x2CC + 16, 1);
-	ctx_raw = ctx_raw + 15;
-	ctx_raw = ctx_raw - (ctx_raw % 16);
-	ctx = ctx_raw;
-	i = 0;
-	while(i < 179)
-	{
-		ctx[i] = 0;
-		i = i + 1;
-	}
-	ctx[0] = 0x10007;                     /* CONTEXT_FULL */
-
-	NtGetContextThread = __ntdll(NT_GETCONTEXT);
-	/* forwards: NtGetContextThread(thread, ctx) */
-	rc = NtGetContextThread(ctx, thread);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* This thread's committed stack, which is what the child has to be given
-	 * a copy of.  StackBase and StackLimit are at 0x04 and 0x08 in the TEB;
-	 * the stack grows down, so StackLimit is the low end. */
-	teb = __teb();
-	stack_high = teb[1];
-	stack_low = teb[2];
-	stack_len = stack_high - stack_low;
-	if(0 >= stack_len)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* Everything this program has: the one section, from where it starts to
-	 * the top of the heap -- code, globals and every byte malloc has handed
-	 * out.  The copy starts at 0x401000 rather than at the image base
-	 * because the page below that is the PE header, which the loader maps
-	 * read-only; writing there answers STATUS_PARTIAL_COPY and there is
-	 * nothing in it that differs between two runs of one program anyway. */
-	heap_top = brk(0);
-	rc = __fork_write(child, 0x401000, 0x401000, heap_top - 0x401000);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* The child has barely touched its own stack: it started, ran its loader
-	 * init and its startup, and parked, all within a page or two of the top.
-	 * Everything below that is reserved rather than committed there, and a
-	 * write to a page that is only reserved answers STATUS_PARTIAL_COPY --
-	 * which is what made fork fail from any depth at all.  A parent that had
-	 * recursed far enough to grow its own stack had more committed than the
-	 * child did, and the difference was exactly the part that could not be
-	 * written; shallow callers happened to fit, and so happened to work.
-	 *
-	 * Committing just the parent's committed range is not enough, though,
-	 * and the reason is the guard page.  Windows grows a stack by putting a
-	 * PAGE_GUARD page below what is committed and committing one more when
-	 * it is touched; the child's guard page sits high, where its own short
-	 * stack ended, and is inside the range being written.  Overwrite it and
-	 * the child has no guard anywhere, so the first call that reaches past
-	 * the copied region touches reserved memory and dies rather than growing
-	 * -- which is what a child that forked deep and then recursed did.
-	 *
-	 * So commit the whole reservation instead.  It is 0x200000, because that
-	 * is the SizeOfStackReserve x86/PE32-i386.hex2 writes into every image
-	 * this chain builds, and StackBase is its top.  A child then has its
-	 * whole stack already there and needs no guard page to grow into it, at
-	 * the cost of 2MB of committed memory per fork -- which is the same 2MB
-	 * the parent would have ended up committing anyway had it recursed that
-	 * far.  Committing what is already committed is not an error. */
-	base = calloc(1, 4);
-	size = calloc(1, 4);
-	base[0] = stack_high - 0x200000;
-	size[0] = 0x200000;
-	NtAllocateVirtualMemory = __ntdll(NT_ALLOC);
-	/* forwards: NtAllocateVirtualMemory(child, base, 0, size, MEM_COMMIT,
-	 *                                   PAGE_READWRITE) */
-	rc = NtAllocateVirtualMemory(4, 0x1000, size, 0, base, child);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	rc = __fork_write(child, stack_low, stack_low, stack_len);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* Point it at what __fork_setjmp wrote down.  Everything else in the
-	 * context is left exactly as Windows built it -- the segment registers
-	 * above all, which is the whole difference between this and the clone. */
-
-	ctx[46] = __fork_geteip();            /* where fork returns to */
-	ctx[49] = __fork_getesp();            /* on its caller's stack */
-	ctx[44] = 0;                          /* EAX: and fork returned 0 */
-
-	NtSetContextThread = __ntdll(NT_SETCONTEXT);
-	/* forwards: NtSetContextThread(thread, ctx) */
-	rc = NtSetContextThread(ctx, thread);
-	if(0 != rc)
-	{
-		NtTerminateProcess(1, child);
-		return -1;
-	}
-
-	/* Suspended twice: once by us just now, once by the spin it was in.  Let
-	 * it go the once; it was resumed out of its creation suspend already. */
-	NtResumeThread(0, thread);
-
-	/* As in __spawn: the thread handle is finished with, and a fork that
-	 * leaked one per call would run a program out of handles long before it
-	 * ran it out of anything else. */
-	NtClose = __ntdll(NT_CLOSE);
-	NtClose(thread);
-
-	return child;
+	return __clone_process_wow64fix();
 }
 #endif
