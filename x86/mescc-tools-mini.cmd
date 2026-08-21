@@ -39,10 +39,12 @@ rem This is the last link written by hand; everything above it is compiled.
 
 rem Phase-5  M2-Planet, a C compiler with more of the language than cc_x86 has.
 rem M2-Planet and M2libc\bootstrappable.c are upstream's, unmodified, vendored
-rem as git submodules.  x86\M2libc-windows\bootstrap.c is this project's own
-rem port of M2libc\x86\linux\bootstrap.c and is the only Windows-specific piece.
+rem as git submodules.  M2libc\x86\windows\bootstrap.c -- this project's own
+rem port of M2libc\x86\linux\bootstrap.c, and the only Windows-specific piece
+rem this phase needs -- lives in the M2libc fork (see .gitmodules) alongside
+rem the rest of this Windows port, rather than in this tree.
 "%ART%\catm.exe" "%ART%\M2-0.c" ^
-	"%HERE%M2libc-windows\bootstrap.c" ^
+	"%HERE%..\M2libc\x86\windows\bootstrap.c" ^
 	"%HERE%..\M2-Planet\cc.h" "%HERE%..\M2libc\bootstrappable.c" ^
 	"%HERE%..\M2-Planet\cc_globals.c" "%HERE%..\M2-Planet\cc_reader.c" "%HERE%..\M2-Planet\cc_strings.c" ^
 	"%HERE%..\M2-Planet\cc_types.c" "%HERE%..\M2-Planet\cc_emit.c" "%HERE%..\M2-Planet\cc_core.c" ^
@@ -67,7 +69,7 @@ rem M2's own C is unmodified, so it always ends its output with :ELF_end, the
 rem label its ELF header expects; PE32-i386.hex2 expects :PE_end.  pe-end-shim.M1
 rem defines :PE_end at that same address without touching the vendored source.
 "%ART%\M2.exe" --architecture x86 --bootstrap-mode ^
-	-f "%HERE%M2libc-windows\bootstrap.c" ^
+	-f "%HERE%..\M2libc\x86\windows\bootstrap.c" ^
 	-f "%HERE%..\M2libc\bootstrappable.c" ^
 	-f "%HERE%..\mescc-tools\stringify.c" ^
 	-f "%HERE%..\mescc-tools\M1-macro.c" ^
@@ -82,20 +84,20 @@ rem this one replaces it, and unlike that one it is not limited to a fixed
 rem label table.  It needs the real preprocessor -- hex2.h says
 rem "#define max_string 4096" where M1-macro.c used an enum -- so this stage
 rem drops --bootstrap-mode, which in turn means the full M2libc rather than
-rem M2libc-windows\bootstrap.c: stdio.c's FILE and its buffering, standing on
-rem the POSIX layer in M2libc-windows\{unistd,fcntl,sys\stat}.c.
+rem M2libc\x86\windows\bootstrap.c: stdio.c's FILE and its buffering, standing
+rem on the POSIX layer in M2libc\x86\windows\{unistd,fcntl,sys\stat}.c.
 "%ART%\M2.exe" --architecture x86 ^
 	-D __windows__=1 ^
 	-f "%HERE%..\M2libc\sys\types.h" ^
 	-f "%HERE%..\M2libc\stddef.h" ^
 	-f "%HERE%..\M2libc\sys\utsname.h" ^
-	-f "%HERE%M2libc-windows\ntdll-slots.h" ^
-	-f "%HERE%M2libc-windows\ntdll.c" ^
-	-f "%HERE%M2libc-windows\unistd.c" ^
-	-f "%HERE%M2libc-windows\process.c" ^
-	-f "%HERE%M2libc-windows\fcntl.c" ^
+	-f "%HERE%..\M2libc\x86\windows\ntdll-slots.h" ^
+	-f "%HERE%..\M2libc\x86\windows\ntdll.c" ^
+	-f "%HERE%..\M2libc\x86\windows\unistd.c" ^
+	-f "%HERE%..\M2libc\x86\windows\process.c" ^
+	-f "%HERE%..\M2libc\x86\windows\fcntl.c" ^
 	-f "%HERE%..\M2libc\fcntl.c" ^
-	-f "%HERE%M2libc-windows\sys\stat.c" ^
+	-f "%HERE%..\M2libc\x86\windows\sys\stat.c" ^
 	-f "%HERE%..\M2libc\ctype.c" ^
 	-f "%HERE%..\M2libc\stdlib.c" ^
 	-f "%HERE%..\M2libc\stdarg.h" ^

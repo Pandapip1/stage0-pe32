@@ -4,7 +4,7 @@
  * Additional permission under GNU GPL version 3 section 7:
  * see LICENSE.EXCEPTION in the root of this project.
  *
- * Checks M2libc-windows/ntdll.c's new __ntdll_resolve -- a native, in-process
+ * Checks M2libc/x86/windows/ntdll.c's new __ntdll_resolve -- a native, in-process
  * PEB/export-table walk that finds an ntdll routine by name -- against every
  * routine resolve_all already resolves by fixed slot (ntdll-i386.hex2,
  * ntdll-slots.h), by comparing the two addresses for each. If they always

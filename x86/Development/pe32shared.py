@@ -22,7 +22,7 @@ BOUNDARY = "__shared_end"
 
 # Every ntdll routine any program here resolves, in the order resolve_all fills
 # them in.  That order is the slot numbering libc-core.M1's __ntdll indexes and
-# M2libc-windows/ntdll-slots.h names, so it is the one place it is written
+# M2libc/x86/windows/ntdll-slots.h names, so it is the one place it is written
 # down: append here, never insert, and regenerate.
 #
 # The first eight are what the hand-written stages need and are reached from

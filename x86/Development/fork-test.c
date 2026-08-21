@@ -19,7 +19,7 @@
  *
  *   fork-test x86\artifact\hex0.exe x86\hex0_x86.hex0 out.exe
  *
- * See fork in x86/M2libc-windows/process.c for how it is done and what it
+ * See fork in M2libc/x86/windows/process.c for how it is done and what it
  * rests on.
  */
 

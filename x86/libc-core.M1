@@ -56,7 +56,7 @@
 # either, and the mnemonic is silently dropped instead of assembled.  Getting
 # this file wrong doesn't fail loudly; it corrupts the binary quietly.
 #
-# x86/M2libc-windows/bootstrap.c is the other half: it is the C these are
+# M2libc/x86/windows/bootstrap.c is the other half: it is the C these are
 # reached from, and the two are meant to be read together.
 #
 # Upstream's x86/libc-core.M1 is nine instructions, because on Linux argc and
@@ -422,7 +422,7 @@ DEFINE test_ebx,ebx 85DB
 # Returns this process's PEB
 #
 # fs:0x30 is TEB->PEB, the same field _start_main and __stdslot already read
-# by hand above; a named function for it is what M2libc-windows/ntdll.c's
+# by hand above; a named function for it is what M2libc/x86/windows/ntdll.c's
 # __ntdll_find_module walks from to resolve routines by name instead of by
 # the fixed slot table resolve_all fills in.
 :__peb
@@ -646,7 +646,7 @@ DEFINE test_ebx,ebx 85DB
 # is laid out identically.  So the parent cannot copy anything in until that
 # init is done and out of the way.  __fork_child_flag is how it says "you are a
 # fork child, do not run main"; __fork_parked is how the child says back "I am
-# out of my own way now, and spinning".  See fork in M2libc-windows/process.c.
+# out of my own way now, and spinning".  See fork in M2libc/x86/windows/process.c.
 :__fork_child_flag
 	NULL
 

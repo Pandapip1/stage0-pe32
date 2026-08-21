@@ -4,7 +4,7 @@
  * Additional permission under GNU GPL version 3 section 7:
  * see LICENSE.EXCEPTION in the root of this project.
  *
- * x86/M2libc-windows/process.c, exercised.  Build it the way Phase 7 builds
+ * M2libc/x86/windows/process.c, exercised.  Build it the way Phase 7 builds
  * hex2 -- the same -f list, with this file last -- and give it a program to
  * start, followed by whatever that program wants:
  *
@@ -28,7 +28,7 @@
  * used to fail there and pass under wine, because a child's startup replaced
  * the standard handles it had been given before it ran.  The "and what arrived
  * was" list coming out empty is that failure, rather than an argument that did
- * not survive being quoted.  See the head of x86/M2libc-windows/process.c for
+ * not survive being quoted.  See the head of M2libc/x86/windows/process.c for
  * what the child was doing and which flag stops it.
  */
 

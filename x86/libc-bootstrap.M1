@@ -5,7 +5,7 @@
 # see LICENSE.EXCEPTION in the root of this project.
 #
 # libc-bootstrap.M1: the :__libc_init that libc-core.M1's _start calls, for a
-# program built against x86/M2libc-windows/bootstrap.c.
+# program built against M2libc/x86/windows/bootstrap.c.
 #
 # There is nothing to do.  bootstrap.c has no FILE* and no free list -- its
 # malloc hands out the image's own memory and never takes any back, and its

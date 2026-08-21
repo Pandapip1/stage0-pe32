@@ -125,7 +125,7 @@ From cc_x86 up, the chain compiles C rather than hand-written assembly, and the
 C it compiles first is M2-Planet's own: `M2-Planet/`, `M2libc/` and
 `mescc-tools/` are git submodules, pinned to the exact commits stage0-posix
 itself vendors them at, because nothing in them is Windows-specific and there
-is nothing to port. `x86/libc-core.M1` and `x86/M2libc-windows/bootstrap.c` are
+is nothing to port. `x86/libc-core.M1` and `M2libc/x86/windows/bootstrap.c` are
 what M2-Planet and M1-macro compile against instead of
 `M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit plumbing a C program
 needs, standing on `x86/ntdll-i386.hex2` the same way `x86/cc_x86.M1` does. See
@@ -162,7 +162,7 @@ the label its ELF header expects; `PE32-i386.hex2` expects `:PE_end`.
 `x86/pe-end-shim.M1` defines `:PE_end` at that same address without touching
 the vendored source -- catm puts it right after M2's output.
 
-`x86/M2libc-windows/` is where the port actually lives. `bootstrap.c` is the
+`M2libc/x86/windows/` is where the port actually lives. `bootstrap.c` is the
 whole C library for the stages that can use `--bootstrap-mode`; `unistd.c`,
 `fcntl.c` and `sys/stat.c` are the POSIX layer underneath M2libc's own
 `stdio.c` for the stages that cannot. A file descriptor is a Windows HANDLE,
@@ -173,10 +173,10 @@ and returns success, which is the honest answer on a system where a file is
 executable because its PE header says so.
 
 Everything M2libc's `unistd.h` and `sys/stat.h` declare is there.
-`x86/M2libc-windows/ntdll.c` is what the rest of it stands on: `__ntdll(slot)`
+`M2libc/x86/windows/ntdll.c` is what the rest of it stands on: `__ntdll(slot)`
 hands back a routine ntdll-i386.hex2 resolved, and `__ntobject(path)` turns a
 filename into the OBJECT_ATTRIBUTES around an NT path that every ntdll call
-naming a file wants. `x86/M2libc-windows/ntdll-slots.h` says which slot is
+naming a file wants. `M2libc/x86/windows/ntdll-slots.h` says which slot is
 which and is generated, from the same list `ntdll-i386.hex2` is, so the two
 cannot drift apart. `x86/Development/posix-test.c` calls every routine once and
 checks the answer.
@@ -199,7 +199,7 @@ jumps to zero with nothing to say where it came from. That cost three
 debugging rounds in one sitting, so `x86/Development/check_fnptr_args.py`
 fails on one now, and is checked against all three.
 
-`x86/M2libc-windows/process.c` is starting another program and waiting for it.
+`M2libc/x86/windows/process.c` is starting another program and waiting for it.
 
 `fork` works here, and not by any of the means Windows offers for it. Windows'
 own fork primitive does not work at all, for reasons worth writing down and
@@ -775,7 +775,7 @@ never releases, and the child hangs forever trying to re-acquire it. Zeroing
 that one lock's four bytes in the child before resuming is the rest of the
 fix, and it is measured, not hoped: the clone runs ordinary 32-bit code past
 the point that fault used to end at, and returns `STATUS_PROCESS_CLONED`
-correctly. `x86/M2libc-windows/process.c`'s `__clone_process_wow64fix` is
+correctly. `M2libc/x86/windows/process.c`'s `__clone_process_wow64fix` is
 the whole of it; `x86/Development/wow64-clone-driver.md` has the disassembly.
 `NtCreateProcessEx` is still refused a thread regardless -- that half of the
 verdict stands.

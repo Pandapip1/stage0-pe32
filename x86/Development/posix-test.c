@@ -4,7 +4,7 @@
  * Additional permission under GNU GPL version 3 section 7:
  * see LICENSE.EXCEPTION in the root of this project.
  *
- * Every routine x86/M2libc-windows/ provides, called once, with the answer
+ * Every routine M2libc/x86/windows/ provides, called once, with the answer
  * checked.  Build it the way Phase 7 builds hex2 -- the same -f list, with
  * this file last instead of hex2's -- and run it with any existing file as
  * argv[1].  It makes and removes posixtest-dir in the working directory.
