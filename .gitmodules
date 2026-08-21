@@ -6,4 +6,4 @@
 	url = https://github.com/Pandapip1/M2libc.git
 [submodule "mescc-tools"]
 	path = mescc-tools
-	url = https://git.savannah.nongnu.org/git/mescc-tools.git
+	url = https://github.com/Pandapip1/mescc-tools.git

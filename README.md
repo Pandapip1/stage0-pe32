@@ -42,8 +42,10 @@ reading, from the bottom up.
 ## Building
 
 Clone with submodules -- from cc_x86 up, the build compiles C, and M2-Planet,
-M2libc and mescc-tools are vendored as submodules rather than by hand, since
-they are upstream's exactly as upstream wrote them:
+M2libc and mescc-tools are vendored as submodules rather than by hand.
+M2-Planet is upstream's exactly as upstream wrote it; M2libc and mescc-tools
+are forks, and each carries one Windows-shaped change that is described where
+it matters below:
 
     git clone --recurse-submodules <this repo>
 
@@ -89,7 +91,13 @@ image with ERROR_BAD_EXE_FORMAT. `SizeOfRawData`, which the format says must be
 a multiple of `FileAlignment`, is left as the exact length of the program, and
 that Windows does accept. Both of these were measured rather than assumed.
 
-There is no kaem, and there may never be one: see Building above.
+This chain does not use kaem: cmd.exe drives it, see Building above. That is
+about the chain and not about kaem, and something building *on* this chain --
+nova-nix, which has no cmd.exe to reach for -- does want one. What it takes is
+`spawn` in `M2libc/x86/windows/process.c`, which starts a program and waits
+for it in one step because Windows cannot fork; kaem reaches for it under
+`__windows__`, beside the `__uefi__` that is the only other occurrence of the
+idea in its 1494 lines. Both changes are in the forks named under Building.
 
 ## Where the sources come from
 
@@ -123,9 +131,10 @@ demonstrably the same compiler.
 
 From cc_x86 up, the chain compiles C rather than hand-written assembly, and the
 C it compiles first is M2-Planet's own: `M2-Planet/`, `M2libc/` and
-`mescc-tools/` are git submodules, pinned to the exact commits stage0-posix
-itself vendors them at, because nothing in them is Windows-specific and there
-is nothing to port. `x86/libc-core.M1` and `M2libc/x86/windows/bootstrap.c` are
+`mescc-tools/` are git submodules, pinned at or just above the exact commits
+stage0-posix itself vendors them at. Almost nothing in them is
+Windows-specific: M2-Planet needs nothing at all, mescc-tools needs two lines
+in kaem, and M2libc needs the `x86/windows/` target this project wrote. `x86/libc-core.M1` and `M2libc/x86/windows/bootstrap.c` are
 what M2-Planet and M1-macro compile against instead of
 `M2libc/x86/linux/bootstrap.c` -- the argc/argv/exit plumbing a C program
 needs, standing on `x86/ntdll-i386.hex2` the same way `x86/cc_x86.M1` does. See
@@ -815,8 +824,10 @@ A pid is the process handle, the way a file descriptor is a file handle.
 `execve` does not replace the running image, because nothing on Windows can,
 but it does not return either and the process's exit status is the child's.
 A caller that today says `fork()` then `execve` in the child and `waitpid` in
-the parent says `__spawn` then `waitpid` instead, and needs no fork; that is
-the change `kaem` and M2-Mesoplanet would want, and it is two lines.
+the parent says `__spawn` then `waitpid` instead, and needs no fork. `spawn`
+beside them is exactly that pair, under the name M2libc's UEFI target already
+gives it -- UEFI cannot fork either -- and it is what `kaem` now uses.
+M2-Mesoplanet would want the same change.
 
 The child inherits this process's three standard handles, which is what makes
 redirection possible, and getting that right took one thing beyond the obvious.
