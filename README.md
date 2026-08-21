@@ -173,13 +173,24 @@ and returns success, which is the honest answer on a system where a file is
 executable because its PE header says so.
 
 Everything M2libc's `unistd.h` and `sys/stat.h` declare is there.
-`M2libc/x86/windows/ntdll.c` is what the rest of it stands on: `__ntdll(slot)`
-hands back a routine ntdll-i386.hex2 resolved, and `__ntobject(path)` turns a
-filename into the OBJECT_ATTRIBUTES around an NT path that every ntdll call
-naming a file wants. `M2libc/x86/windows/ntdll-slots.h` says which slot is
-which and is generated, from the same list `ntdll-i386.hex2` is, so the two
-cannot drift apart. `x86/Development/posix-test.c` calls every routine once and
-checks the answer.
+`M2libc/x86/windows/ntdll.c` is what the rest of it stands on:
+`__ntdll_resolve(name)` finds a routine by walking this process's own
+PEB -> Ldr -> module list and ntdll's own export table, in-process, and
+`__ntobject(path)` turns a filename into the OBJECT_ATTRIBUTES around an NT
+path that every ntdll call naming a file wants. `x86/Development/
+ntdll-resolve-test.c` checks it against every routine the older mechanism
+below still resolves, by name, and confirms a name ntdll does not export
+comes back NULL rather than something else's address.
+
+Underneath that, hex0 through M0 -- which have no C compiler yet and so
+cannot call `__ntdll_resolve` -- still reach ntdll the older way: by a fixed
+slot `resolve_all` fills in at startup (`ntdll-i386.hex2`), which
+`__ntdll(slot)` and `M2libc/x86/windows/ntdll-slots.h`'s `NT_*` constants
+name. `ntdll-slots.h` is generated from the same list `ntdll-i386.hex2` is,
+so the two cannot drift apart, and it stays in use for that hand-assembled
+layer even though the compiled C layer above no longer calls into it.
+`x86/Development/posix-test.c` calls every routine once and checks the
+answer.
 
 Where Windows has no answer -- `chroot`, `mount`, `unshare`, `symlink`,
 `mknod`, `fchdir` -- the call fails, and says why above itself. Failing is the
