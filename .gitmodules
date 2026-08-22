@@ -1,6 +1,6 @@
 [submodule "M2-Planet"]
 	path = M2-Planet
-	url = https://github.com/oriansj/M2-Planet.git
+	url = https://github.com/Pandapip1/M2-Planet.git
 [submodule "M2libc"]
 	path = M2libc
 	url = https://github.com/Pandapip1/M2libc.git

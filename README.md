@@ -133,8 +133,18 @@ From cc_x86 up, the chain compiles C rather than hand-written assembly, and the
 C it compiles first is M2-Planet's own: `M2-Planet/`, `M2libc/` and
 `mescc-tools/` are git submodules, pinned at or just above the exact commits
 stage0-posix itself vendors them at. Almost nothing in them is
-Windows-specific: M2-Planet needs nothing at all, mescc-tools needs two lines
-in kaem, and M2libc needs the `x86/windows/` target this project wrote.
+Windows-specific: mescc-tools needs two lines in kaem, and M2libc needs the
+`x86/windows/` target this project wrote.
+
+M2-Planet needs nothing Windows-specific either, but carries one fix that
+is not: `&&` and `||` were compiled as the exact same instruction as `&`
+and `|` on every architecture -- both sides evaluated unconditionally, no
+short-circuit, the raw bitwise combination kept as the result rather than
+0 or 1. `if (p && *p)`, the ordinary C idiom for "don't read through a
+pointer that might be null", read through it first and checked second.
+Found by exactly that shape crashing GNU Mes's own `__assert_fail` on this
+port -- the two are pinned against each other for a reason -- but the bug
+and the fix are both general; nothing about them is Windows's.
 
 `mescc-tools-extra/` is vendored at the same commit and for the same reason,
 and nothing in it needed porting at all. It is not part of the chain -- no
