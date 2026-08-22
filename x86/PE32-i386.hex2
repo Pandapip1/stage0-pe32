@@ -41,10 +41,10 @@
 # The image imports nothing: NumberOfRvaAndSizes is 0, so there is no import
 # directory.  A program reaches ntdll through the PEB instead.
 #
-# SizeOfStackReserve is 8MB, not the 1MB a default MSVC-linked program gets:
+# SizeOfStackReserve is 64MB, not the 1MB a default MSVC-linked program gets:
 # found by running a self-hosted C compiler built on this bootstrap (nova-nix's
 # tinycc port) far enough to compile a real source file, where 2MB -- this
-# field's previous value -- overflowed partway through, walking the stack down
+# field's original value -- overflowed partway through, walking the stack down
 # from the top of its reservation to the bottom before Windows raised
 # STATUS_STACK_OVERFLOW. Two things stack it deeper than a native build of the
 # same compiler would: MesCC gives every function it compiles a fixed-size
@@ -52,9 +52,14 @@
 # and the ntdll-by-PEB path every syscall-shaped call takes here
 # (lib/windows/ntdll.c's __ntdll_resolve, ntcall.c's __ntcallN) is itself a few
 # more stack frames per call than a real syscall instruction would ever cost.
-# SizeOfStackCommit is unchanged -- Windows grows the committed region on
-# demand as the stack is touched, up to whatever is reserved here, so only the
-# ceiling needed to move.
+# 8MB (the first bump tried) still overflowed at a different depth -- a
+# self-hosted tcc compiling a real translation unit (libtcc1.c, boot-mes.exe's
+# own first target) recurses deep enough, with MesCC's per-call frame tax
+# under it, that a merely-bigger reserve keeps getting outrun rather than
+# comfortably clearing it, so this jumps to 64MB instead of tuning up in small
+# steps again. SizeOfStackCommit is unchanged -- Windows grows the committed
+# region on demand as the stack is touched, up to whatever is reserved here,
+# so only the ceiling needed to move.
 
 :PE_base
 
@@ -114,7 +119,7 @@ B8 00                           # e_sp
 00 00 00 00                     # CheckSum = 0, which is accepted for anything but a kernel image
 03 00                           # Subsystem = 3 (console)
 00 01                           # DllCharacteristics = 0x0100 (NX compatible)
-00 00 80 00                     # SizeOfStackReserve = 0x800000 (8MB)
+00 00 00 04                     # SizeOfStackReserve = 0x4000000 (64MB)
 00 10 00 00                     # SizeOfStackCommit
 00 00 10 00                     # SizeOfHeapReserve
 00 10 00 00                     # SizeOfHeapCommit
